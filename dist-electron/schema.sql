@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS project_phases (
     deadline                TEXT,
     completed_at            TEXT,
     position_override       INTEGER,
+    estimated_hours         REAL,
     created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
@@ -154,8 +155,10 @@ CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type);
 CREATE TABLE IF NOT EXISTS invoices (
     id              TEXT PRIMARY KEY,
     project_id      TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    offer_id        TEXT,
     invoice_number  TEXT,
     client_name     TEXT NOT NULL,
+    client_id       TEXT,
     amount_cents    INTEGER NOT NULL,
     currency        TEXT NOT NULL DEFAULT 'EUR',
     status          TEXT NOT NULL DEFAULT 'open',
@@ -357,99 +360,21 @@ CREATE INDEX IF NOT EXISTS idx_goals_completed ON goals(is_completed);
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS todos (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    description TEXT,
-    status TEXT NOT NULL DEFAULT 'open',
-    priority TEXT NOT NULL DEFAULT 'normal',
-    due_date TEXT,
-    week_key TEXT,
-    sprintid TEXT REFERENCES sprints(id) ON DELETE SET NULL,
-    projectid TEXT REFERENCES projects(id) ON DELETE SET NULL,
-    projectphaseid TEXT REFERENCES projectphases(id) ON DELETE SET NULL,
-    socialpostid TEXT REFERENCES socialposts(id) ON DELETE SET NULL,
-    position INTEGER NOT NULL DEFAULT 0,
-    completed_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    id              TEXT PRIMARY KEY,
+    title           TEXT NOT NULL,
+    description     TEXT,
+    status          TEXT NOT NULL DEFAULT 'open',
+    priority        TEXT NOT NULL DEFAULT 'normal',
+    due_date        TEXT,
+    week_key        TEXT,
+    project_id      TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    project_phase_id TEXT REFERENCES project_phases(id) ON DELETE SET NULL,
+    social_post_id  TEXT REFERENCES social_posts(id) ON DELETE SET NULL,
+    position        INTEGER NOT NULL DEFAULT 0,
+    completed_at    TEXT,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
-
-CREATE TABLE IF NOT EXISTS projectphases (
-  id TEXT PRIMARY KEY,
-  projectid TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  phasetemplateitemid TEXT REFERENCES phasetemplateitems(id) ON DELETE SET NULL,
-  nameoverride TEXT,
-  status TEXT NOT NULL DEFAULT 'open',
-  deadline TEXT,
-  completedat TEXT,
-  positionoverride INTEGER,
-  createdat TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  updatedat TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-);
-
-CREATE TABLE IF NOT EXISTS projectchecklistitems (
-  id TEXT PRIMARY KEY,
-  projectphaseid TEXT NOT NULL REFERENCES projectphases(id) ON DELETE CASCADE,
-  checklisttemplateitemid TEXT REFERENCES checklisttemplateitems(id) ON DELETE SET NULL,
-  labeloverride TEXT,
-  ischecked INTEGER NOT NULL DEFAULT 0,
-  checkedat TEXT,
-  positionoverride INTEGER,
-  status TEXT NOT NULL DEFAULT 'todo',
-  sprintid TEXT REFERENCES sprints(id) ON DELETE SET NULL,
-  createdat TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-);
-
-CREATE TABLE IF NOT EXISTS projectassets (
-  id TEXT PRIMARY KEY,
-  projectid TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  projectphaseid TEXT REFERENCES projectphases(id) ON DELETE SET NULL,
-  type TEXT NOT NULL,
-  label TEXT NOT NULL,
-  value TEXT NOT NULL,
-  filename TEXT,
-  filemime TEXT,
-  filesize INTEGER,
-  createdat TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-);
-
-CREATE TABLE IF NOT EXISTS sprints (
-  id TEXT PRIMARY KEY,
-  name TEXT,
-  startdate TEXT,
-  enddate TEXT,
-  isactive INTEGER DEFAULT 1
-);
-
-CREATE TABLE IF NOT EXISTS phasetemplates (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  description TEXT,
-  issystem INTEGER NOT NULL DEFAULT 0,
-  createdat TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  updatedat TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-);
-
-CREATE TABLE IF NOT EXISTS phasetemplateitems (
-  id TEXT PRIMARY KEY,
-  templateid TEXT NOT NULL REFERENCES phasetemplates(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  description TEXT,
-  position INTEGER NOT NULL,
-  createdat TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_phasetemplateitems_template ON phasetemplateitems(templateid, position);
-
-CREATE TABLE IF NOT EXISTS checklisttemplateitems (
-  id TEXT PRIMARY KEY,
-  phasetemplateitemid TEXT NOT NULL REFERENCES phasetemplateitems(id) ON DELETE CASCADE,
-  label TEXT NOT NULL,
-  position INTEGER NOT NULL,
-  createdat TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_checklisttemplateitems_phase ON checklisttemplateitems(phasetemplateitemid, position);
 
 CREATE INDEX IF NOT EXISTS idx_todos_week ON todos(week_key, position);
 CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status);
@@ -586,18 +511,6 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 
 -- ============================================================
--- SCHEMA-VERSIONIERUNG
--- ============================================================
-
-CREATE TABLE IF NOT EXISTS schema_migrations (
-    version         INTEGER PRIMARY KEY,
-    applied_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-);
-
-INSERT OR IGNORE INTO schema_migrations (version) VALUES (1);
-INSERT OR IGNORE INTO schema_migrations (version) VALUES (2);
-
--- ============================================================
 -- AVV (Auftragsverarbeitungsvertrag)
 -- ============================================================
 
@@ -641,9 +554,9 @@ CREATE TABLE IF NOT EXISTS documents (
   status TEXT NOT NULL,
   file_name TEXT,
   file_path TEXT,
-  file_data TEXT,      -- NEU HINZUFÜGEN
-  file_mime TEXT,      -- NEU HINZUFÜGEN
-  file_size INTEGER,   -- NEU HINZUFÜGEN
+  file_data TEXT,
+  file_mime TEXT,
+  file_size INTEGER,
   notes TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -653,7 +566,6 @@ CREATE INDEX IF NOT EXISTS idx_documents_entity ON documents(entity_type, entity
 CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(document_type);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 
-
 -- ============================================================
 -- SCHEMA-VERSIONIERUNG
 -- ============================================================
@@ -662,7 +574,6 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     version         INTEGER PRIMARY KEY,
     applied_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
-
 
 INSERT OR IGNORE INTO schema_migrations (version) VALUES (1);
 INSERT OR IGNORE INTO schema_migrations (version) VALUES (2);

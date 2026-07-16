@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   Plus, ChevronRight, Play, Square, Trash2, Check, Link2, FileText,
   CalendarClock, FolderKanban, ArrowLeft, Pencil, Image, X, Download, Eye,
+  List, LayoutGrid,
 } from 'lucide-react';
 import {
   projects, phases, checklist, assets, templates, uuid, clients,
@@ -14,6 +15,14 @@ import type {
 import { formatDate, relativeDeadline, todayISO } from '../lib/format';
 import { startTimer, useRunningTimer, stopAndSave, formatElapsed } from '../lib/timer';
 import { Modal, Badge, EmptyState, Field, ConfirmInline } from '../components/ui';
+import { KanbanBoard, type KanbanColumn } from '../components/KanbanBoard';
+
+const PHASE_COLUMNS: KanbanColumn<PhaseStatus>[] = [
+  { id: 'open', label: 'Offen', colorClass: 'bg-ink-300' },
+  { id: 'in_progress', label: 'In Arbeit', colorClass: 'bg-accent-500' },
+  { id: 'done', label: 'Erledigt', colorClass: 'bg-success-500' },
+  { id: 'skipped', label: 'Übersprungen', colorClass: 'bg-warning-500' },
+];
 
 const STATUS_LABELS: Record<ProjectStatus, string> = {
   active: 'Aktiv', paused: 'Pausiert', done: 'Abgeschlossen', cancelled: 'Abgebrochen',
@@ -139,6 +148,7 @@ function ProjectDetail({ project, onBack }: { project: Project; onBack: () => vo
   const [tplList, setTplList] = useState<PhaseTemplate[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [tplItems, setTplItems] = useState<Record<string, PhaseTemplateItem[]>>({});
+  const [phaseView, setPhaseView] = useState<'list' | 'board'>('list');
   const running = useRunningTimer();
   const isThisRunning = running?.entityType === 'project' && running?.entityId === project.id;
 
@@ -358,12 +368,69 @@ function ProjectDetail({ project, onBack }: { project: Project; onBack: () => vo
       <div className="card p-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="section-title">Phasen</h2>
-          <button onClick={() => setShowTemplateImport(true)} className="btn-ghost text-sm">
-            <Plus size={14} /> Aus Vorlage importieren
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="flex bg-surfaceMuted rounded-lg p-0.5">
+              <button
+                onClick={() => setPhaseView('list')}
+                className={`p-1.5 rounded-md transition-colors ${phaseView === 'list' ? 'bg-surface shadow-soft text-ink-900' : 'text-ink-500'}`}
+                title="Listenansicht"
+              >
+                <List size={15} />
+              </button>
+              <button
+                onClick={() => setPhaseView('board')}
+                className={`p-1.5 rounded-md transition-colors ${phaseView === 'board' ? 'bg-surface shadow-soft text-ink-900' : 'text-ink-500'}`}
+                title="Board-Ansicht"
+              >
+                <LayoutGrid size={15} />
+              </button>
+            </div>
+            <button onClick={() => setShowTemplateImport(true)} className="btn-ghost text-sm">
+              <Plus size={14} /> Aus Vorlage importieren
+            </button>
+          </div>
         </div>
         {phaseList.length === 0 ? (
           <EmptyState title="Noch keine Phasen" hint="Füge die erste Phase hinzu oder importiere aus einer Vorlage." />
+        ) : phaseView === 'board' ? (
+          <KanbanBoard
+            columns={PHASE_COLUMNS}
+            cards={phaseList}
+            getStatus={(phase) => phase.status}
+            onMove={(phase, newStatus) => setPhaseStatus(phase, newStatus)}
+            renderCard={(phase) => {
+              const checks = checklistMap[phase.id] || [];
+              const done = checks.filter(c => c.is_checked).length;
+              const dl = relativeDeadline(phase.deadline);
+              return (
+                <div className="bg-surface border border-line rounded-lg p-3 shadow-soft hover:border-accent-200 transition-colors">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-sm font-medium text-ink-900">{phase.name_override || 'Unbenannte Phase'}</p>
+                    <button
+                      onClick={() => removePhase(phase.id)}
+                      className="p-0.5 text-ink-300 hover:text-danger-600 shrink-0"
+                      title="Löschen"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 mt-2 flex-wrap">
+                    {checks.length > 0 && (
+                      <span className="text-2xs text-ink-500 tabular-nums bg-surfaceMuted px-1.5 py-0.5 rounded">
+                        {done}/{checks.length} erledigt
+                      </span>
+                    )}
+                    {phase.deadline && (
+                      <span className={`text-2xs flex items-center gap-1 ${dl.tone === 'overdue' ? 'text-danger-600' : dl.tone === 'soon' ? 'text-warning-600' : 'text-ink-400'}`}>
+                        <CalendarClock size={11} /> {dl.label}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            }}
+            emptyHint="Karte hierher ziehen"
+          />
         ) : (
           <div className="space-y-3">
             {phaseList.map(phase => (

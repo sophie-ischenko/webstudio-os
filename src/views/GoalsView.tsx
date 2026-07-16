@@ -5,6 +5,7 @@ import type { Goal, GoalPeriodType, GoalCategory } from '../types';
 import { isoWeek, startOfWeek } from '../lib/format';
 import { Badge, EmptyState, Field, Modal } from '../components/ui';
 
+
 const PERIOD_LABELS: Record<GoalPeriodType, string> = {
   week: 'Woche', month: 'Monat', quarter: 'Quartal', year: 'Jahr',
 };

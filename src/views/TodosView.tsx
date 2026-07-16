@@ -1,12 +1,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   Plus, Trash2, Check, ChevronLeft, ChevronRight, Link2, Calendar,
-  Flag, Inbox, CheckSquare, Clock, Pencil,
+  Flag, Inbox, CheckSquare, Clock, Pencil, List, LayoutGrid,
 } from 'lucide-react';
 import { todos, projects, posts, uuid } from '../lib/db';
 import type { Todo, Project, SocialPost, TodoStatus, TodoPriority } from '../types';
 import { formatDate, isoWeek, startOfWeek, relativeDeadline } from '../lib/format';
 import { Badge, EmptyState, Field, Modal } from '../components/ui';
+import { KanbanBoard, type KanbanColumn } from '../components/KanbanBoard';
 
 const STATUS_LABELS: Record<TodoStatus, string> = {
   open: 'Offen', in_progress: 'In Arbeit', done: 'Erledigt',
@@ -14,6 +15,12 @@ const STATUS_LABELS: Record<TodoStatus, string> = {
 const PRIORITY_LABELS: Record<TodoPriority, string> = {
   low: 'Niedrig', normal: 'Normal', high: 'Hoch',
 };
+
+const TODO_COLUMNS: KanbanColumn<TodoStatus>[] = [
+  { id: 'open', label: 'Offen', colorClass: 'bg-ink-300' },
+  { id: 'in_progress', label: 'In Arbeit', colorClass: 'bg-accent-500' },
+  { id: 'done', label: 'Erledigt', colorClass: 'bg-success-500' },
+];
 
 function weekKeyHelper(offset: number): string {
   const d = new Date();
@@ -36,6 +43,7 @@ export function TodosView() {
   const [showAdd, setShowAdd] = useState(false);
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
   const [filter, setFilter] = useState<'all' | TodoStatus>('all');
+  const [todoView, setTodoView] = useState<'list' | 'board'>('list');
 
   const currentWeek = weekKeyHelper(weekOffset);
   const realCurrentWeek = weekKeyHelper(0);
@@ -58,6 +66,14 @@ export function TodosView() {
     await todos.update(todo.id, {
       status: next,
       completed_at: next === 'done' ? new Date().toISOString() : null,
+    });
+    load();
+  }
+
+  async function setTodoStatus(todo: Todo, status: TodoStatus) {
+    await todos.update(todo.id, {
+      status,
+      completed_at: status === 'done' ? new Date().toISOString() : null,
     });
     load();
   }
@@ -103,38 +119,126 @@ export function TodosView() {
 
       {/* Week view */}
       <div className="card p-5">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
           <div className="flex items-center gap-2">
             <Calendar size={18} className="text-accent-600" />
             <h2 className="section-title">{weekLabel(currentWeek)}</h2>
             <Badge tone="neutral">{openCount} offen</Badge>
             {doneCount > 0 && <Badge tone="success">{doneCount} erledigt</Badge>}
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => setWeekOffset(o => o - 1)} className="p-1.5 rounded-lg hover:bg-surfaceAlt"><ChevronLeft size={18} /></button>
-            <button onClick={() => setWeekOffset(0)} className="btn-ghost text-sm">Diese Woche</button>
-            <button onClick={() => setWeekOffset(o => o + 1)} className="p-1.5 rounded-lg hover:bg-surfaceAlt"><ChevronRight size={18} /></button>
+          <div className="flex items-center gap-4">
+            {/* View toggle */}
+            <div className="flex bg-surfaceMuted rounded-lg p-0.5">
+              <button
+                onClick={() => setTodoView('list')}
+                className={`p-1.5 rounded-md transition-colors ${todoView === 'list' ? 'bg-surface shadow-soft text-ink-900' : 'text-ink-500'}`}
+                title="Listenansicht"
+              >
+                <List size={15} />
+              </button>
+              <button
+                onClick={() => setTodoView('board')}
+                className={`p-1.5 rounded-md transition-colors ${todoView === 'board' ? 'bg-surface shadow-soft text-ink-900' : 'text-ink-500'}`}
+                title="Board-Ansicht"
+              >
+                <LayoutGrid size={15} />
+              </button>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <button onClick={() => setWeekOffset(o => o - 1)} className="p-1.5 rounded-lg hover:bg-surfaceAlt"><ChevronLeft size={18} /></button>
+              <button onClick={() => setWeekOffset(0)} className="btn-ghost text-sm">Diese Woche</button>
+              <button onClick={() => setWeekOffset(o => o + 1)} className="p-1.5 rounded-lg hover:bg-surfaceAlt"><ChevronRight size={18} /></button>
+            </div>
           </div>
         </div>
 
-        {/* Filter */}
-        <div className="flex gap-2 mb-4">
-          {(['all', 'open', 'in_progress', 'done'] as const).map(f => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`chip transition-colors ${filter === f ? 'bg-accent-600 text-white' : 'bg-surfaceMuted text-ink-700 hover:bg-line'}`}
-            >
-              {f === 'all' ? 'Alle' : STATUS_LABELS[f]}
-            </button>
-          ))}
-        </div>
+        {/* Filter (nur in der Listenansicht relevant, im Kanban werden alle nach Status gruppiert) */}
+        {todoView === 'list' && (
+          <div className="flex gap-2 mb-4">
+            {(['all', 'open', 'in_progress', 'done'] as const).map(f => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`chip transition-colors ${filter === f ? 'bg-accent-600 text-white' : 'bg-surfaceMuted text-ink-700 hover:bg-line'}`}
+              >
+                {f === 'all' ? 'Alle' : STATUS_LABELS[f]}
+              </button>
+            ))}
+          </div>
+        )}
 
-        {filteredWeek.length === 0 ? (
+        {weekList.length === 0 ? (
           <EmptyState
             icon={<CheckSquare size={24} />}
             title="Keine To-dos in dieser Woche"
             hint="Füge Aufgaben hinzu oder weise Inbox-Items dieser Woche zu."
+          />
+        ) : todoView === 'board' ? (
+          <KanbanBoard
+            columns={TODO_COLUMNS}
+            cards={weekList}
+            getStatus={(todo) => todo.status}
+            onMove={(todo, newStatus) => setTodoStatus(todo, newStatus)}
+            renderCard={(todo) => {
+  const isDone = todo.status === 'done';
+  const dl = relativeDeadline(todo.due_date);
+  const label = projectLabel(todo);
+  return (
+    <div className="bg-surface border border-line rounded-lg p-3 shadow-soft hover:border-accent-200 transition-colors">
+      <div className="flex items-start justify-between gap-2">
+        <p className={`text-sm font-medium ${isDone ? 'text-ink-400 line-through' : 'text-ink-900'}`}>
+          {todo.title}
+        </p>
+        <button
+          onClick={(e) => { e.stopPropagation(); remove(todo.id); }}
+          className="p-0.5 text-ink-300 hover:text-danger-600 shrink-0"
+          title="Löschen"
+        >
+          <Trash2 size={12} />
+        </button>
+      </div>
+      
+      <div className="flex flex-col gap-1.5 mt-2">
+        {label && (
+          <span className="flex items-center gap-1 text-2xs text-ink-500">
+            <Link2 size={11} className="shrink-0" />
+            <span className="truncate">{label}</span>
+          </span>
+        )}
+        {todo.due_date && (
+          <span className={`text-2xs flex items-center gap-1 ${dl.tone === 'overdue' ? 'text-danger-600' : dl.tone === 'soon' ? 'text-warning-600' : 'text-ink-400'}`}>
+            <Calendar size={11} /> {formatDate(todo.due_date)}
+          </span>
+        )}
+      </div>
+      
+      {/* Jetzt ohne border-t und ohne Schrägstrich im CSS */}
+      <div className="mt-3 flex items-center justify-between">
+        <select
+          value={todo.priority}
+          onChange={(e) => setPriority(todo.id, e.target.value as TodoPriority)}
+          className="text-2xs bg-transparent border-0 text-ink-500 focus:outline-none cursor-pointer"
+        >
+          {(['low', 'normal', 'high'] as TodoPriority[]).map(p => (
+            <option key={p} value={p}>{PRIORITY_LABELS[p]}</option>
+          ))}
+        </select>
+        <div className="flex items-center gap-1.5">
+          {todo.priority === 'high' && <Flag size={12} className="text-danger-500" />}
+          <button
+            onClick={(e) => { e.stopPropagation(); setEditingTodo(todo); }}
+            className="p-1 text-ink-400 hover:text-accent-600 rounded"
+            title="Bearbeiten"
+          >
+            <Pencil size={12} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}}
+            emptyHint="Karte hierher ziehen"
           />
         ) : (
           <div className="space-y-1.5">
