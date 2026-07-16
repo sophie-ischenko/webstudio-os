@@ -1,0 +1,178 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-canvas: #f3efe8;
+  --color-surface: #faf7f2;
+  --color-surface-alt: #ece6dc;
+  --color-surface-muted: #e3ddd1;
+  --color-ink-900: #1c1b1a;
+  --color-ink-700: #4a4744;
+  --color-ink-500: #8a8580;
+  --color-ink-400: #b5afa8;
+  --color-ink-300: #d6d0c8;
+  --color-line: #ddd5c8;
+  --shadow-rgb: 28, 27, 26;
+
+  --color-ink-900: #132e33;
+  --color-ink-700: #355b63;
+  --color-ink-500: #648990;
+  --color-ink-400: #97afb4;
+  --color-ink-300: #bccdd0;
+
+  /* Mauve accent */
+  --color-accent-50:  #f7f1f4;
+  --color-accent-100: #eddde3;
+  --color-accent-200: #dec3cd;
+  --color-accent-300: #c99bac;
+  --color-accent-400: #b77a91;
+  --color-accent-500: #a95f7b;
+  --color-accent-600: #914e67;
+  --color-accent-700: #774054;
+  --color-accent-800: #59303f;
+  --color-accent-900: #3b202a;
+
+  --color-success-50: #f0fdf4;
+  --color-success-500: #22c55e;
+  --color-success-600: #16a34a;
+  --color-success-700: #15803d;
+
+  --color-warning-50: #fffbeb;
+  --color-warning-500: #f59e0b;
+  --color-warning-600: #d97706;
+  --color-warning-700: #b45309;
+
+  --color-danger-50: #f7ecee;
+  --color-danger-500: #8a4953;
+  --color-danger-600: #733843;
+  --color-danger-700: #5c2c35;
+
+  --color-info-50: #eff6ff;
+  --color-info-500: #3b82f6;
+  --color-info-600: #2563eb;
+  --color-info-700: #1d4ed8;
+}
+
+/* ── Dark theme — Fundament Studio petrol, mauve accent ── */
+.dark {
+  --color-canvas: #16282c;
+  --color-surface: #1e3c42;
+  --color-surface-alt: #214047;      /* leicht neutralisiert gegenüber vorher */
+  --color-surface-muted: #294a50;    /* dezenter */
+  --color-sidebar: #183035;          /* dezente Sidebar-Farbe */
+  --color-sidebar-alt: #1f3940;
+  --color-line: #2f4d54;
+  --shadow-rgb: 0, 0, 0;
+
+  --color-ink-900: #f0ece4;
+  --color-ink-700: #c2c8c7;
+  --color-ink-500: #8a9c9e;
+  --color-ink-400: #5d7376;
+  --color-ink-300: #3a5258;
+
+  /* Mauve accent — lighter stops for contrast on dark petrol */
+  --color-accent-50:  #351c25;
+  --color-accent-100: #482733;
+  --color-accent-200: #633546;
+  --color-accent-300: #84475e;
+  --color-accent-400: #a95f7b;
+  --color-accent-500: #bb8196;
+  --color-accent-600: #c99bac;
+  --color-accent-700: #d7b6c2;
+  --color-accent-800: #e6d0d8;
+  --color-accent-900: #f2e7eb;
+
+  --color-success-50: #131b15;
+  --color-success-500: #5e9c6e;
+  --color-success-600: #7eb38c;
+  --color-success-700: #a3cbac;
+
+  --color-warning-50: #1c1810;
+  --color-warning-500: #c79a4a;
+  --color-warning-600: #d4ae6c;
+  --color-warning-700: #e1c594;
+
+  --color-danger-50: #1f1315;
+  --color-danger-500: #a9606c;
+  --color-danger-600: #c08089;
+  --color-danger-700: #d6a3a9;
+
+  --color-info-50: #11161c;
+  --color-info-500: #6a93b8;
+  --color-info-600: #8baecd;
+  --color-info-700: #b0cae0;
+}
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-canvas text-ink-900 font-sans antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+  ::selection {
+    @apply bg-accent-200 text-accent-900;
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { @apply bg-line rounded-full; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-ink-300; }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface border border-line rounded-xl shadow-soft;
+  }
+  .card-hover {
+    @apply transition-all duration-200 hover:shadow-card hover:border-accent-200;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium transition-all duration-150 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none;
+  }
+  .btn-primary {
+    @apply btn bg-accent-600 text-white hover:bg-accent-700 shadow-soft;
+  }
+  .btn-ghost {
+    @apply btn text-ink-700 hover:bg-surfaceAlt;
+  }
+  .btn-outline {
+    @apply btn border border-line bg-surface text-ink-700 hover:border-accent-300 hover:text-accent-700;
+  }
+  .btn-danger {
+    @apply btn text-danger-600 hover:bg-danger-50;
+  }
+  .input {
+    @apply w-full px-3 py-2 rounded-lg border border-line bg-surface text-sm text-ink-900 placeholder:text-ink-400
+           focus:outline-none focus:border-accent-400 focus:ring-2 focus:ring-accent-100 transition-all;
+  }
+  .label {
+    @apply block text-2xs font-semibold uppercase tracking-wider text-ink-500 mb-1.5;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium;
+  }
+  .page-title {
+    @apply font-display text-3xl font-medium text-ink-900 tracking-tight;
+  }
+  .section-title {
+    @apply font-display text-lg font-medium text-ink-900;
+  }
+  .stat-value {
+    @apply font-display text-2xl font-medium text-ink-900 tabular-nums;
+  }
+  .stat-label {
+    @apply text-2xs font-medium uppercase tracking-wider text-ink-500;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  .tabular-nums { font-variant-numeric: tabular-nums; }
+}
