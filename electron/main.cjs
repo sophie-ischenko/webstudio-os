@@ -232,6 +232,16 @@ function openDatabase() {
     }
   }
 
+  // Spaltennachrüstung: project_phases -> planned_month_key (FÜR DEN SYNC BENÖTIGT)
+  try {
+    db.exec("ALTER TABLE project_phases ADD COLUMN planned_month_key TEXT;");
+    console.warn('[DATENBANK] Spalte planned_month_key erfolgreich für Modulphasen nachgerüstet!');
+  } catch (e) {
+    if (!e.message.includes('duplicate column name') && !e.message.includes('already exists')) {
+      console.error('[DATENBANK FEHLER] Fehler bei planned_month_key Spalte:', e.message);
+    }
+  }
+
   // Spaltennachrüstung: social_posts -> content_pillar
   try {
     db.exec("ALTER TABLE social_posts ADD COLUMN content_pillar TEXT;");
