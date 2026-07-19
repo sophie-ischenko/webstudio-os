@@ -1,5 +1,3 @@
-
-
 import { useEffect, useState } from 'react';
 import {
   Database, Download, Info, Save, HardDrive, Plus, X,
@@ -8,7 +6,7 @@ import {
 
 import {
   settings, backup, restore, isElectron,
-  getPlatforms, setPlatforms, getFormats, setFormats,
+  getPlatforms, setPlatforms, getFormats, setFormats, getPillars, setPillars,
   exportCsv, exportJson,
   resetDatabase,
 } from '../lib/db';
@@ -24,8 +22,11 @@ export function SettingsView() {
 
   const [platforms, setPlatformList] = useState<string[]>([]);
   const [formats, setFormatList] = useState<string[]>([]);
+  const [pillars, setPillarList] = useState<string[]>([]);
+  
   const [newPlatform, setNewPlatform] = useState('');
   const [newFormat, setNewFormat] = useState('');
+  const [newPillar, setNewPillar] = useState('');
 
   // Inhaber-Daten
   const [ownerName, setOwnerName] = useState('');
@@ -61,11 +62,12 @@ export function SettingsView() {
           setOwnerIban(d.iban || '');
           setOwnerBankName(d.bankName || '');
           setOwnerTaxId(d.taxId || '');
-        } catch { /* ignore */ }
+        } catch (err) { /* ignore */ }
       }
 
       setPlatformList(await getPlatforms());
       setFormatList(await getFormats());
+      setPillarList(await getPillars());
     })();
   }, []);
 
@@ -148,6 +150,21 @@ export function SettingsView() {
     const next = formats.filter(x => x !== f);
     setFormatList(next);
     await setFormats(next);
+  }
+
+  async function addPillar() {
+    const v = newPillar.trim().toLowerCase().replace(/\s+/g, '_');
+    if (!v || pillars.includes(v)) return;
+    const next = [...pillars, v];
+    setPillarList(next);
+    await setPillars(next);
+    setNewPillar('');
+  }
+
+  async function removePillar(p: string) {
+    const next = pillars.filter(x => x !== p);
+    setPillarList(next);
+    await setPillars(next);
   }
 
   return (
@@ -310,6 +327,31 @@ export function SettingsView() {
             onKeyDown={(e) => { if (e.key === 'Enter') addFormat(); }}
           />
           <button onClick={addFormat} className="btn-outline"><Plus size={14} /> Hinzufügen</button>
+        </div>
+      </div>
+
+      {/* Content-Säulen */}
+      <div className="card p-5">
+        <SectionHeader title="Content-Säulen" />
+        <p className="text-sm text-ink-500 mb-3">Diese strategischen Säulen strukturieren deine Social-Media-Inhalte.</p>
+        <div className="flex flex-wrap gap-2 mb-3">
+          {pillars.map(p => (
+            <span key={p} className="chip bg-accent-50 text-accent-700 capitalize">
+              {p.replace(/_/g, ' ')}
+              <button onClick={() => removePillar(p)} className="ml-1 hover:text-danger-600"><X size={12} /></button>
+            </span>
+          ))}
+          {pillars.length === 0 && <p className="text-sm text-ink-400">Keine Content-Säulen definiert</p>}
+        </div>
+        <div className="flex gap-2">
+          <input
+            className="input flex-1"
+            placeholder="z.B. behind_the_scenes"
+            value={newPillar}
+            onChange={(e) => setNewPillar(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') addPillar(); }}
+          />
+          <button onClick={addPillar} className="btn-outline"><Plus size={14} /> Hinzufügen</button>
         </div>
       </div>
 

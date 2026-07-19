@@ -682,7 +682,19 @@ export async function getFormats(): Promise<string[]> {
 export async function setFormats(list: string[]): Promise<void> {
   await settings.set('social_formats', JSON.stringify(list));
 }
+// --- Füge das in src/lib/db.ts unter getFormats / setFormats ein ---
 
+const DEFAULT_PILLARS = ['education', 'inspiration', 'promotion', 'behind_the_scenes'];
+
+export async function getPillars(): Promise<string[]> {
+  const row = await settings.get('social_pillars');
+  if (row) { try { return JSON.parse(row.value); } catch { /* ignore */ } }
+  return DEFAULT_PILLARS;
+}
+
+export async function setPillars(list: string[]): Promise<void> {
+  await settings.set('social_pillars', JSON.stringify(list));
+}
 function toCsv(rows: Record<string, unknown>[]): string {
   if (rows.length === 0) return '';
   const cols = Object.keys(rows[0]);

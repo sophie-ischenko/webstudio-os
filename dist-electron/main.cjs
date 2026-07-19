@@ -27,41 +27,16 @@ function getSchemaPath() {
  * damit es sowohl bei einer frischen/leeren DB als auch bei einer
  * bereits existierenden DB gefahrlos laufen kann.
  */
-/**
- * Generischer Schema-Abgleich: liest die CREATE TABLE-Definitionen aus
- * schema.sql, vergleicht sie pro Tabelle mit den tatsächlich vorhandenen
- * Spalten (PRAGMA table_info) und ergänzt fehlende Spalten per
- * ALTER TABLE ... ADD COLUMN mit exaktem Typ/Constraint aus schema.sql.
- *
- * Hintergrund: Die manuelle Pflege einzelner Migrationsversionen (v2..v10)
- * ist bei diesem Projekt mehrfach hinter dem tatsächlichen Stand von
- * schema.sql zurückgeblieben (invoices.status, clients.onboarding_status,
- * project_checklist_items.position_override, etc. fehlten alle gleichzeitig
- * auf Alt-DBs). Statt jede Abweichung einzeln nachzutragen, wird hier
- * strukturell abgeglichen — das deckt auch zukünftige schema.sql-Änderungen
- * automatisch ab, OHNE dass jedes Mal eine neue Migrationsversion nötig ist.
- *
- * Einschränkungen (bewusst konservativ):
- * - Nur ADD COLUMN, kein DROP/RENAME/Typ-Änderung (SQLite kann das eh nur
- *   eingeschränkt und es wäre destruktiv).
- * - NOT NULL ohne DEFAULT wird beim Nachtragen auf existierenden Zeilen
- *   automatisch mit einem neutralen Default versehen (leerer String / 0),
- *   damit ALTER TABLE nicht scheitert. Die eigentliche NOT NULL-Constraint
- *   aus schema.sql bleibt dabei erhalten.
- * - Tabellen, die es in der DB noch gar nicht gibt, werden hier ignoriert
- *   (die legt schema.sql selbst per CREATE TABLE IF NOT EXISTS an).
- */
 function reconcileSchemaColumns(database, schemaPath) {
   let schema = fs.readFileSync(schemaPath, 'utf8');
 
-  // NEU: SQL-Kommentare (--) entfernen, bevor der Text analysiert wird,
-  // damit der Parser nicht über Erklärtexte ("oder Base64-Daten") stolpert.
+  // SQL-Kommentare (--) entfernen, bevor der Text analysiert wird
   schema = schema.split('\n').map(line => {
     const idx = line.indexOf('--');
     return idx === -1 ? line : line.slice(0, idx);
   }).join('\n');
 
-  // Alle CREATE TABLE-Blöcke aus schema.sql extrahieren: Name + Spaltenliste
+  // Alle CREATE TABLE-Blöcke aus schema.sql extrahieren
   const tableRe = /CREATE TABLE IF NOT EXISTS\s+(\w+)\s*\(([\s\S]*?)\n\);/gi;
   let match;
 
@@ -79,14 +54,13 @@ function reconcileSchemaColumns(database, schemaPath) {
       database.prepare(`PRAGMA table_info(${tableName})`).all().map(c => c.name)
     );
 
-    // Spaltenzeilen grob parsen: eine Zeile pro Spalte, getrennt durch Kommas
+    // Spaltenzeilen grob parsen
     const columnDefs = splitTopLevelCommas(body);
 
     for (const rawDef of columnDefs) {
       const def = rawDef.trim();
       if (!def) continue;
 
-      // Zeilen wie UNIQUE(...), PRIMARY KEY(...) etc. ohne Spaltennamen überspringen
       const colMatch = def.match(/^(\w+)\s+(.*)$/s);
       if (!colMatch) continue;
       const colName = colMatch[1];
@@ -97,8 +71,7 @@ function reconcileSchemaColumns(database, schemaPath) {
 
       let colDef = colMatch[2].trim().replace(/,$/, '');
 
-      // NOT NULL ohne DEFAULT auf einer potenziell nicht-leeren Tabelle
-      // schlägt in SQLite fehl -> neutralen Default ergänzen, falls keiner da ist.
+      // NOT NULL ohne DEFAULT auf einer potenziell nicht-leeren Tabelle abfangen
       const hasDefault = /\bDEFAULT\b/i.test(colDef);
       const hasNotNull = /\bNOT\s+NULL\b/i.test(colDef);
       if (hasNotNull && !hasDefault) {
@@ -139,7 +112,7 @@ function reconcileSchemaColumns(database, schemaPath) {
   }
 }
 
-/** Teilt einen Klammerinhalt an Kommas auf Klammertiefe 0 (ignoriert Kommas in verschachtelten Klammern). */
+/** Teilt einen Klammerinhalt an Kommas auf Klammertiefe 0 */
 function splitTopLevelCommas(text) {
   const parts = [];
   let depth = 0;
@@ -158,12 +131,6 @@ function splitTopLevelCommas(text) {
   return parts;
 }
 
-/**
- * Zerlegt ein SQL-Skript in einzelne Top-Level-Statements, ohne dabei
- * CREATE TRIGGER ... BEGIN ... END;-Blöcke mittendrin zu zerschneiden.
- * Ein simples split(';') zerreißt solche Blöcke, weil sie selbst
- * Semikolons enthalten könnten — das führt zu "incomplete input".
- */
 function splitSqlStatements(sql) {
   const statements = [];
   let current = '';
@@ -208,12 +175,6 @@ function applyBaseSchema(database) {
   }
   const schema = fs.readFileSync(schemaPath, 'utf8');
 
-  // schema.sql enthält eigene "INSERT OR IGNORE INTO schema_migrations
-  // (version) VALUES (n)"-Zeilen. Das darf schema.sql NICHT selbst steuern:
-  // sonst markiert es Migrationsversionen als "bereits erledigt", obwohl
-  // die zugehörigen ALTER TABLE-Befehle in runMigrations() nie liefen —
-  // genau das hat die fehlenden Spalten verursacht. Die Migrations-
-  // Buchhaltung gehört ausschließlich runMigrations().
   const statements = splitSqlStatements(schema).filter(stmt => {
     const isMigrationBookkeeping = /INSERT\s+(OR\s+IGNORE\s+)?INTO\s+schema_migrations/i.test(stmt);
     if (isMigrationBookkeeping) {
@@ -236,7 +197,7 @@ function applyBaseSchema(database) {
       if (!tolerable) throw e;
 
       console.warn(
-        '[SCHEMA WARNUNG] Statement übersprungen (Schema-Drift, wird per reconcileSchemaColumns/Migration nachgezogen):\n',
+        '[SCHEMA WARNUNG] Statement übersprungen (Schema-Drift):\n',
         stmt.slice(0, 120).replace(/\s+/g, ' '),
         '\n  Grund:', msg
       );
@@ -251,15 +212,16 @@ function openDatabase() {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
-  // NEU & SYNCHRON: Spalte sofort beim Öffnen der DB-Datei anlegen, falls sie fehlt
+  // NEU & SYNCHRON: Spalte sofort beim Öffnen der DB-Datei anlegen, falls sie fehlt (suppliers)
   try {
     db.exec("ALTER TABLE suppliers ADD COLUMN cancel_intended INTEGER NOT NULL DEFAULT 0;");
     console.warn('[DATENBANK] Spalte cancel_intended erfolgreich nachgerüstet!');
   } catch (e) {
-    // Falls die Spalte schon da ist, wirft SQLite einen Fehler - den ignorieren wir einfach
     if (!e.message.includes('duplicate column name') && !e.message.includes('already exists')) {
       console.error('[DATENBANK FEHLER] Fehler beim Prüfen der cancel_intended Spalte:', e.message);
     }
+  }
+
   // NEU & SYNCHRON: Wochen-Planungs-Spalte für Modulphasen nachrüsten
   try {
     db.exec("ALTER TABLE project_phases ADD COLUMN planned_week_key TEXT;");
@@ -269,19 +231,17 @@ function openDatabase() {
       console.error('[DATENBANK FEHLER] Fehler bei planned_week_key Spalte:', e.message);
     }
   }
+
+  // NEU & SYNCHRON: Content-Säulen Spalte für Social-Posts nachrüsten
+  try {
+    db.exec("ALTER TABLE social_posts ADD COLUMN content_pillar TEXT;");
+    console.warn('[DATENBANK] Spalte content_pillar erfolgreich für social_posts nachgerüstet!');
+  } catch (e) {
+    if (!e.message.includes('duplicate column name') && !e.message.includes('already exists')) {
+      console.error('[DATENBANK FEHLER] Fehler bei content_pillar Spalte:', e.message);
+    }
   }
 
-  // WICHTIG: schema.sql IMMER zuerst anwenden — auch beim normalen
-  // App-Start, nicht nur bei db:reset. Sonst schlägt runMigrations()
-  // (ALTER TABLE ...) fehl, sobald die DB-Datei fehlt/gelöscht wurde,
-  // weil die Basistabellen dann schlicht nicht existieren.
-  // Reihenfolge ist wichtig:
-  // 1) applyBaseSchema: legt fehlende Tabellen an. CREATE INDEX-Statements
-  //    auf Spalten, die auf einer alten Tabelle noch fehlen, schlagen dabei
-  //    (tolerant) fehl und werden nur geloggt.
-  // 2) reconcileSchemaColumns: trägt genau diese fehlenden Spalten nach.
-  // 3) applyBaseSchema erneut: jetzt greifen die zuvor übersprungenen
-  //    CREATE INDEX-Statements, weil die Spalten nun existieren.
   applyBaseSchema(db);
   reconcileSchemaColumns(db, getSchemaPath());
   applyBaseSchema(db);
@@ -508,7 +468,6 @@ function runMigrations(database) {
         'CREATE INDEX IF NOT EXISTS idx_invoices_offer ON invoices(offer_id)',
       ],
     },
-    // NEU: Version 10 führt die Spalte synchron beim App-Start ein!
     {
       version: 10,
       up: [
@@ -668,8 +627,7 @@ function registerIpc() {
       database.exec('DROP TABLE IF EXISTS app_settings;');
       database.exec('DROP TABLE IF EXISTS schema_migrations;');
 
-      // Nutzt jetzt dieselbe Reihenfolge wie openDatabase(), damit
-      // Reset und Erststart garantiert denselben Weg gehen.
+      // Nutzt jetzt dieselbe Reihenfolge wie openDatabase()
       applyBaseSchema(database);
       reconcileSchemaColumns(database, getSchemaPath());
       applyBaseSchema(database);
@@ -687,13 +645,13 @@ function registerIpc() {
   });
 
   ipcMain.handle('file:pick', async () => {
-  const res = await dialog.showOpenDialog(mainWindow, {
-    title: 'Datei auswählen',
-    properties: ['openFile'],
-    filters: [
-      { name: 'Alle Dateien', extensions: ['*'] },
-    ],
-  });
+    const res = await dialog.showOpenDialog(mainWindow, {
+      title: 'Datei auswählen',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Alle Dateien', extensions: ['*'] },
+      ],
+    });
 
     if (res.canceled || res.filePaths.length === 0) {
       return { ok: false, reason: 'canceled' };
