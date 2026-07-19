@@ -5,22 +5,27 @@ import type { Goal, GoalPeriodType, GoalCategory } from '../types';
 import { isoWeek, startOfWeek } from '../lib/format';
 import { Badge, EmptyState, Field, Modal } from '../components/ui';
 
-
 const PERIOD_LABELS: Record<GoalPeriodType, string> = {
   week: 'Woche', month: 'Monat', quarter: 'Quartal', year: 'Jahr',
 };
+
 const CATEGORY_LABELS: Record<GoalCategory, string> = {
   revenue: 'Umsatz', time: 'Zeit', projects: 'Projekte', social: 'Social', personal: 'Persönlich',
 };
+
 const CATEGORY_TONE: Record<GoalCategory, 'accent' | 'info' | 'success' | 'warning' | 'neutral'> = {
   revenue: 'success', time: 'info', projects: 'accent', social: 'warning', personal: 'neutral',
 };
 
+// Berechnet den eindeutigen Key für die Datenbank (z.B. "2026-Q3")
 function periodKey(type: GoalPeriodType, offset: number): string {
   const d = new Date();
+  d.setDate(1); // Verhindert Datumsüberläufe (z.B. am 31. Januar + 1 Monat)
+
   if (type === 'week') {
-    d.setDate(d.getDate() + offset * 7);
-    const ws = startOfWeek(d);
+    const weekDate = new Date();
+    weekDate.setDate(weekDate.getDate() + offset * 7);
+    const ws = startOfWeek(weekDate);
     return `${ws.getFullYear()}-W${String(isoWeek(ws)).padStart(2, '0')}`;
   }
   if (type === 'month') {
@@ -36,6 +41,7 @@ function periodKey(type: GoalPeriodType, offset: number): string {
   return String(d.getFullYear() + offset);
 }
 
+// FIX: Verfeinerte Anzeige der Quartale (Unterteilung in Monatsspannen)
 function periodLabel(type: GoalPeriodType, key: string): string {
   if (type === 'week') {
     const [y, w] = key.split('-W');
@@ -46,7 +52,14 @@ function periodLabel(type: GoalPeriodType, key: string): string {
     return new Date(parseInt(y), parseInt(m) - 1, 1).toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
   }
   if (type === 'quarter') {
-    return key.replace('-', ' ');
+    const [y, q] = key.split('-Q');
+    const quarters: Record<string, string> = {
+      '1': 'Q1 (Jan – Mär)',
+      '2': 'Q2 (Apr – Jun)',
+      '3': 'Q3 (Jul – Sep)',
+      '4': 'Q4 (Okt – Dez)',
+    };
+    return `${quarters[q] || `Q${q}`} ${y}`;
   }
   return key;
 }
@@ -106,9 +119,9 @@ export function GoalsView() {
         </button>
       </div>
 
-      {/* Period selector */}
+      {/* Perioden-Auswahl */}
       <div className="card p-5">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
           <div className="flex bg-surfaceMuted rounded-lg p-0.5">
             {(['week', 'month', 'quarter', 'year'] as GoalPeriodType[]).map(t => (
               <button
@@ -125,7 +138,7 @@ export function GoalsView() {
             <button onClick={() => setOffset(0)} className="btn-ghost text-sm">Aktuell</button>
             <button onClick={() => setOffset(o => o + 1)} className="p-1.5 rounded-lg hover:bg-surfaceAlt text-ink-500">›</button>
           </div>
-          <p className="text-sm font-medium text-ink-900 min-w-[120px] text-right">{periodLabel(periodType, currentKey)}</p>
+          <p className="text-sm font-medium text-ink-900 min-w-[150px] text-right">{periodLabel(periodType, currentKey)}</p>
         </div>
 
         {goalList.length === 0 ? (
