@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Plus, Trash2, Target, CheckCircle2, Pencil } from 'lucide-react';
-import { goals2, uuid } from '../lib/db';
+import { goals2, transactions, projects, timeEntries, uuid } from '../lib/db';
 import type { Goal, GoalPeriodType, GoalCategory } from '../types';
-import { isoWeek, startOfWeek } from '../lib/format';
+import { isoWeek, startOfWeek, formatMoney } from '../lib/format'; // FIX: 'formatMoney' importiert!
 import { Badge, EmptyState, Field, Modal } from '../components/ui';
 
 const PERIOD_LABELS: Record<GoalPeriodType, string> = {
@@ -37,11 +37,10 @@ function periodKey(type: GoalPeriodType, offset: number): string {
     const q = Math.floor(d.getMonth() / 3) + 1;
     return `${d.getFullYear()}-Q${q}`;
   }
-  // year
   return String(d.getFullYear() + offset);
 }
 
-// FIX: Verfeinerte Anzeige der Quartale (Unterteilung in Monatsspannen)
+// Verfeinerte Anzeige der Quartale (Unterteilung in Monatsspannen)
 function periodLabel(type: GoalPeriodType, key: string): string {
   if (type === 'week') {
     const [y, w] = key.split('-W');
@@ -64,6 +63,93 @@ function periodLabel(type: GoalPeriodType, key: string): string {
   return key;
 }
 
+// --- AUTOMATISIERTE BERECHNUNGS-HELFER ---
+
+function calculateRevenue(periodType: string, periodKey: string, txs: any[]): number {
+  const incomeTxs = txs.filter(t => t.type === 'income');
+  const filtered = incomeTxs.filter(t => {
+    const dateStr = t.transaction_date;
+    if (!dateStr) return false;
+    
+    if (periodType === 'year') return dateStr.startsWith(periodKey);
+    if (periodType === 'month') return dateStr.startsWith(periodKey);
+    if (periodType === 'quarter') {
+      const [y, q] = periodKey.split('-Q');
+      const year = parseInt(y);
+      const quarter = parseInt(q);
+      const month = new Date(dateStr).getMonth() + 1;
+      const txYear = new Date(dateStr).getFullYear();
+      const txQuarter = Math.ceil(month / 3);
+      return txYear === year && txQuarter === quarter;
+    }
+    if (periodType === 'week') {
+      const tDate = new Date(dateStr);
+      const ws = startOfWeek(tDate);
+      const txWeekKey = `${ws.getFullYear()}-W${String(isoWeek(ws)).padStart(2, '0')}`;
+      return txWeekKey === periodKey;
+    }
+    return false;
+  });
+  return filtered.reduce((s, t) => s + (t.amount_cents || 0), 0) / 100; // In Euro konvertieren
+}
+
+function calculateProjects(periodType: string, periodKey: string, projs: any[]): number {
+  const completedProjs = projs.filter(p => p.status === 'done' && p.actual_end_date);
+  const filtered = completedProjs.filter(p => {
+    const dateStr = p.actual_end_date;
+    if (!dateStr) return false;
+
+    if (periodType === 'year') return dateStr.startsWith(periodKey);
+    if (periodType === 'month') return dateStr.startsWith(periodKey);
+    if (periodType === 'quarter') {
+      const [y, q] = periodKey.split('-Q');
+      const year = parseInt(y);
+      const quarter = parseInt(q);
+      const month = new Date(dateStr).getMonth() + 1;
+      const pYear = new Date(dateStr).getFullYear();
+      const pQuarter = Math.ceil(month / 3);
+      return pYear === year && pQuarter === quarter;
+    }
+    if (periodType === 'week') {
+      const pDate = new Date(dateStr);
+      const ws = startOfWeek(pDate);
+      const pWeekKey = `${ws.getFullYear()}-W${String(isoWeek(ws)).padStart(2, '0')}`;
+      return pWeekKey === periodKey;
+    }
+    return false;
+  });
+  return filtered.length;
+}
+
+function calculateTime(periodType: string, periodKey: string, times: any[]): number {
+  const filtered = times.filter(t => {
+    const dateStr = t.entry_date;
+    if (!dateStr) return false;
+
+    if (periodType === 'year') return dateStr.startsWith(periodKey);
+    if (periodType === 'month') return dateStr.startsWith(periodKey);
+    if (periodType === 'quarter') {
+      const [y, q] = periodKey.split('-Q');
+      const year = parseInt(y);
+      const quarter = parseInt(q);
+      const month = new Date(dateStr).getMonth() + 1;
+      const tYear = new Date(dateStr).getFullYear();
+      const tQuarter = Math.ceil(month / 3);
+      return tYear === year && tQuarter === quarter;
+    }
+    if (periodType === 'week') {
+      const tDate = new Date(dateStr);
+      const ws = startOfWeek(tDate);
+      const tWeekKey = `${ws.getFullYear()}-W${String(isoWeek(ws)).padStart(2, '0')}`;
+      return tWeekKey === periodKey;
+    }
+    return false;
+  });
+  return filtered.reduce((s, t) => s + (t.minutes || 0), 0) / 60; // In Stunden konvertieren
+}
+
+// ---------------------------------------------------------------------------
+
 export function GoalsView() {
   const [periodType, setPeriodType] = useState<GoalPeriodType>('week');
   const [offset, setOffset] = useState(0);
@@ -71,13 +157,42 @@ export function GoalsView() {
   const [showAdd, setShowAdd] = useState(false);
   const [editing, setEditing] = useState<Goal | null>(null);
 
+  // States für die automatische Berechnung
+  const [txList, setTxList] = useState<any[]>([]);
+  const [projectList, setProjectList] = useState<any[]>([]);
+  const [timeList, setTimeList] = useState<any[]>([]);
+
   const currentKey = periodKey(periodType, offset);
 
   const load = useCallback(async () => {
-    setGoalList(await goals2.byPeriod(periodType, currentKey));
+    const list = await goals2.byPeriod(periodType, currentKey);
+    const txs = await transactions.list();
+    const projs = await projects.list();
+    const times = await timeEntries.list();
+
+    setGoalList(list);
+    setTxList(txs);
+    setProjectList(projs);
+    setTimeList(times);
   }, [periodType, currentKey]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Dynamische Ist-Werte in Echtzeit berechnen
+  const enrichedGoals = goalList.map(g => {
+    let currentVal = g.current_value;
+    
+    if (g.category === 'revenue') {
+      currentVal = calculateRevenue(periodType, currentKey, txList);
+    } else if (g.category === 'projects') {
+      currentVal = calculateProjects(periodType, currentKey, projectList);
+    } else if (g.category === 'time') {
+      currentVal = calculateTime(periodType, currentKey, timeList);
+    }
+
+    const isCompleted = g.target_value != null && currentVal >= g.target_value ? 1 : g.is_completed;
+    return { ...g, current_value: currentVal, is_completed: isCompleted };
+  });
 
   async function updateProgress(id: string, currentValue: number) {
     const g = goalList.find(x => x.id === id);
@@ -112,7 +227,7 @@ export function GoalsView() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-2xl font-medium text-ink-900">Zielplaner</h1>
-          <p className="text-sm text-ink-500 mt-0.5">Verfolge Wochen-, Monats-, Quartals- und Jahresziele</p>
+          <p className="text-sm text-ink-500 mt-0.5">Automatisierte Wochen-, Monats-, Quartals- und Jahresziele</p>
         </div>
         <button onClick={() => setShowAdd(true)} className="btn-primary">
           <Plus size={16} /> Neues Ziel
@@ -141,7 +256,7 @@ export function GoalsView() {
           <p className="text-sm font-medium text-ink-900 min-w-[150px] text-right">{periodLabel(periodType, currentKey)}</p>
         </div>
 
-        {goalList.length === 0 ? (
+        {enrichedGoals.length === 0 ? (
           <EmptyState
             icon={<Target size={28} />}
             title={`Keine Ziele für ${periodLabel(periodType, currentKey)}`}
@@ -150,7 +265,7 @@ export function GoalsView() {
           />
         ) : (
           <div className="space-y-3">
-            {goalList.map(g => (
+            {enrichedGoals.map(g => (
               <GoalRow
                 key={g.id}
                 goal={g}
@@ -187,6 +302,9 @@ function GoalRow({ goal, onProgress, onToggle, onEdit, onRemove }: {
   const pct = hasTarget ? Math.min(100, Math.round((goal.current_value / (goal.target_value as number)) * 100)) : 0;
   const isDone = goal.is_completed === 1;
 
+  // Prüfen, ob das Ziel automatisch berechnet wird (Umsatz, Projekte, Zeit)
+  const isAutomated = ['revenue', 'projects', 'time'].includes(goal.category || '');
+
   return (
     <div className={`p-4 rounded-lg border ${isDone ? 'border-success-200 bg-success-50/30' : 'border-line bg-surfaceAlt/30'}`}>
       <div className="flex items-start gap-3">
@@ -201,13 +319,14 @@ function GoalRow({ goal, onProgress, onToggle, onEdit, onRemove }: {
           <div className="flex items-center gap-2 mb-1">
             <p className={`text-sm font-medium ${isDone ? 'text-ink-500 line-through' : 'text-ink-900'}`}>{goal.title}</p>
             {goal.category && <Badge tone={CATEGORY_TONE[goal.category]}>{CATEGORY_LABELS[goal.category]}</Badge>}
+            {isAutomated && <Badge tone="info">🔄 Automatisch</Badge>}
           </div>
           {goal.notes && <p className="text-2xs text-ink-500 mb-2">{goal.notes}</p>}
           {hasTarget ? (
             <div>
               <div className="flex items-center justify-between mb-1">
                 <span className="text-2xs text-ink-500 tabular-nums">
-                  {goal.current_value} / {goal.target_value} {goal.unit || ''}
+                  {goal.category === 'revenue' ? formatMoney(goal.current_value * 100) : goal.current_value.toFixed(1)} / {goal.category === 'revenue' ? formatMoney(goal.target_value * 100) : goal.target_value} {goal.unit || ''}
                 </span>
                 <span className="text-2xs font-semibold text-ink-700 tabular-nums">{pct}%</span>
               </div>
@@ -217,28 +336,38 @@ function GoalRow({ goal, onProgress, onToggle, onEdit, onRemove }: {
                   style={{ width: `${pct}%` }}
                 />
               </div>
-              <div className="flex items-center gap-2 mt-2">
-                <input
-                  type="number"
-                  step="0.5"
-                  className="input w-28 text-sm"
-                  value={goal.current_value}
-                  onChange={(e) => onProgress(parseFloat(e.target.value) || 0)}
-                />
-                <span className="text-2xs text-ink-400">{goal.unit || 'Fortschritt aktualisieren'}</span>
-              </div>
+              {!isAutomated && (
+                <div className="flex items-center gap-2 mt-2">
+                  <input
+                    type="number"
+                    step="0.5"
+                    className="input w-28 text-sm"
+                    value={goal.current_value}
+                    onChange={(e) => onProgress(parseFloat(e.target.value) || 0)}
+                  />
+                  <span className="text-2xs text-ink-400">{goal.unit || 'Fortschritt aktualisieren'}</span>
+                </div>
+              )}
             </div>
           ) : (
             <div className="flex items-center gap-2 mt-1">
-              <input
-                type="number"
-                step="0.5"
-                className="input w-28 text-sm"
-                value={goal.current_value}
-                onChange={(e) => onProgress(parseFloat(e.target.value) || 0)}
-                placeholder="Fortschritt"
-              />
-              <span className="text-2xs text-ink-400">{goal.unit || 'Aktueller Wert'}</span>
+              {!isAutomated ? (
+                <>
+                  <input
+                    type="number"
+                    step="0.5"
+                    className="input w-28 text-sm"
+                    value={goal.current_value}
+                    onChange={(e) => onProgress(parseFloat(e.target.value) || 0)}
+                    placeholder="Fortschritt"
+                  />
+                  <span className="text-2xs text-ink-400">{goal.unit || 'Aktueller Wert'}</span>
+                </>
+              ) : (
+                <span className="text-xs text-ink-600 font-medium">
+                  Aktueller Wert: {goal.category === 'revenue' ? formatMoney(goal.current_value * 100) : goal.current_value.toFixed(1)} {goal.unit || ''}
+                </span>
+              )}
             </div>
           )}
         </div>

@@ -3,8 +3,8 @@ import {
   Plus, Trash2, TrendingUp, TrendingDown, Wallet, Target, Pencil, 
   FileText, XCircle, Download, ArchiveRestore, Calendar
 } from 'lucide-react';
-import { transactions, offers, goals, projects, invoices, clients, recurring, uuid, documents, settings } from '../lib/db';
-import type { Transaction, Offer, AnnualGoal, Project, Invoice, InvoicePosition, Client } from '../types';
+import { transactions, offers, goals2, projects, invoices, clients, recurring, uuid, settings } from '../lib/db';
+import type { Transaction, Offer, Goal, Project, Invoice, InvoicePosition, Client } from '../types';
 import { formatMoney, formatMoneyShort, formatDate, todayISO, parseMoneyToCents } from '../lib/format';
 import { Badge, EmptyState, Field, Modal, SectionHeader, MoneyInput } from '../components/ui';
 import jsPDF from 'jspdf';
@@ -28,20 +28,22 @@ const STATUS_LABELS = {
 export function FinancesView() {
   const [txList, setTxList] = useState<Transaction[]>([]);
   const [offerList, setOfferList] = useState<Offer[]>([]);
-  const [goalList, setGoalList] = useState<AnnualGoal[]>([]);
+  
+  // FIX: Wir laden die Ziele aus goals2 (Zielplaner-Tabelle)
+  const [globalGoals, setGlobalGoals] = useState<Goal[]>([]);
   const [projectList, setProjectList] = useState<Project[]>([]);
   const [showAddTx, setShowAddTx] = useState(false);
   const [showAddOffer, setShowAddOffer] = useState(false);
   const [clientList, setClientList] = useState<Client[]>([]);
   const [recurringList, setRecurringList] = useState<any[]>([]);
 
-  // Angebot das direkt in eine Rechnung umgewandelt werden soll
+  // Angebot das direkt in eine Rechung umgewandelt werden soll
   const [offerToInvoice, setOfferToInvoice] = useState<Offer | null>(null);
 
   const load = useCallback(async () => {
     setTxList(await transactions.list());
     setOfferList(await offers.list());
-    setGoalList(await goals.list());
+    setGlobalGoals(await goals2.list()); // Lädt alle Ziele aus der 'goals' Tabelle
     setProjectList(await projects.list());
     setClientList(await clients.list());
     setRecurringList(await recurring.list());
@@ -61,10 +63,18 @@ export function FinancesView() {
   const pipelineWeighted = openOffers.reduce((s, o) => s + (o.estimated_value_cents || 0) * (o.probability_pct || 0) / 100, 0);
 
   const currentYear = now.getFullYear();
-  const goal = goalList.find(g => g.year === currentYear);
+  const currentYearStr = String(currentYear);
+
+  // FIX: Wir filtern die Jahres-Ziele aus der globalen Tabelle heraus
+  const annualRevenueGoal = globalGoals.find(g => g.period_type === 'year' && g.period_key === currentYearStr && g.category === 'revenue');
+  const annualProjectGoal = globalGoals.find(g => g.period_type === 'year' && g.period_key === currentYearStr && g.category === 'projects');
+
+  const hasAnnualGoals = annualRevenueGoal || annualProjectGoal;
+
   const yearIncome = txList
     .filter(t => t.type === 'income' && new Date(t.transaction_date).getFullYear() === currentYear)
     .reduce((s, t) => s + t.amount_cents, 0);
+
   const yearProjectCount = projectList.filter(p =>
     p.status === 'done' && p.actual_end_date && new Date(p.actual_end_date).getFullYear() === currentYear
   ).length;
@@ -127,28 +137,44 @@ export function FinancesView() {
           </button>
         </div>
 
-        {/* Jahresziel */}
+        {/* Jahresziel (Synchronisiert mit dem globalen Zielplaner) */}
         <div className="card p-5">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Target size={18} className="text-success-600" />
               <h2 className="section-title">Jahresziel {currentYear}</h2>
             </div>
-            {goal ? <Badge tone="success">aktiv</Badge> : <Badge tone="warning">fehlt</Badge>}
+            {hasAnnualGoals ? <Badge tone="success">aktiv</Badge> : <Badge tone="warning">fehlt</Badge>}
           </div>
-          {goal ? (
+          {hasAnnualGoals ? (
             <div className="space-y-3">
-              {goal.target_revenue_cents != null && (
-                <GoalProgress label="Umsatz" current={yearIncome} target={goal.target_revenue_cents} formatFn={formatMoneyShort} />
+              {annualRevenueGoal && annualRevenueGoal.target_value && (
+                <GoalProgress 
+                  label="Umsatz" 
+                  current={yearIncome} 
+                  target={annualRevenueGoal.target_value * 100} // Konvertierung von Euro in Cents
+                  formatFn={formatMoneyShort} 
+                />
               )}
-              {goal.target_project_count != null && (
-                <GoalProgress label="Projekte" current={yearProjectCount} target={goal.target_project_count} formatFn={(n) => String(n)} />
+              {annualProjectGoal && annualProjectGoal.target_value && (
+                <GoalProgress 
+                  label="Projekte" 
+                  current={yearProjectCount} 
+                  target={annualProjectGoal.target_value} 
+                  formatFn={(n) => String(n)} 
+                />
               )}
             </div>
           ) : (
             <EmptyState title="Kein Jahresziel" hint="Lege ein Ziel für dieses Jahr fest." />
           )}
-          <GoalEditor year={currentYear} existing={goal || null} onSaved={load} />
+          {/* Neuer GoalEditor, der direkt in die globale 'goals' Tabelle schreibt */}
+          <GoalEditor 
+            year={currentYear} 
+            revenueGoal={annualRevenueGoal || null} 
+            projectGoal={annualProjectGoal || null} 
+            onSaved={load} 
+          />
         </div>
       </div>
 
@@ -207,30 +233,25 @@ export function FinancesView() {
                       {formatMoney(r.amount_cents)}
                     </span>
                     <div className="flex items-center gap-1">
-  <button
-    onClick={() => recurring.confirmOne(r).then(load)}
-    className={`text-2xs px-2 py-1 ${
-      isDue
-        ? 'btn-primary'
-        : 'btn-outline text-ink-500 hover:text-ink-900'
-    }`}
-    title="Jetzt als Ausgabe buchen"
-  >
-    Buchen
-  </button>
-
-  <button
-    onClick={() => {
-      if (confirm(`"${r.description}" wirklich löschen?`)) {
-        recurring.remove(r.id).then(load);
-      }
-    }}
-    className="p-1 text-ink-400 hover:text-danger-600 opacity-0 group-hover:opacity-100"
-    title="Tool/Fixkosten löschen"
-  >
-    <Trash2 size={14} />
-  </button>
-</div>
+                      <button
+                        onClick={() => recurring.confirmOne(r).then(load)}
+                        className={`text-2xs px-2 py-1 ${isDue ? 'btn-primary' : 'btn-outline text-ink-500 hover:text-ink-900'}`}
+                        title="Jetzt als Ausgabe buchen"
+                      >
+                        Buchen
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (confirm(`"${r.description}" wirklich löschen?`)) {
+                            recurring.remove(r.id).then(load);
+                          }
+                        }}
+                        className="p-1 text-ink-400 hover:text-danger-600 opacity-0 group-hover:opacity-100"
+                        title="Tool/Fixkosten löschen"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -279,7 +300,7 @@ export function FinancesView() {
 }
 
 // ---------------------------------------------------------------------------
-// Row helpers
+// Row Helpers
 // ---------------------------------------------------------------------------
 
 function Row({ label, value, tone, bold, icon }: {
@@ -541,7 +562,7 @@ function OfferToInvoiceModal({ offer, projects, clients, onClose, onCreated }: {
     >
       <div className="space-y-4">
         <div className="px-3 py-2.5 rounded-lg bg-success-50 border border-success-200 text-sm text-success-700">
-          Angebot gewonnen 🎉 — Erstelle jetzt direkt die Rechnung. Alle Felder sind vorbefüllt und können angepasst werden.
+          Angebot gewonnen 🎉 — Erstelle jetzt direkt die Rechnungsdatei. Alle Felder sind vorbefüllt und können angepasst werden.
         </div>
 
         <Field label="Kunde aus CRM auswählen (optional)">
@@ -626,11 +647,15 @@ function OfferToInvoiceModal({ offer, projects, clients, onClose, onCreated }: {
           </Field>
           <div className="text-right">
             <p className="text-2xs text-ink-500">Zwischensumme</p>
-            <p className="text-sm font-medium">{formatMoney(subtotal)}</p>
+            <p className="text-sm font-medium">
+              {formatMoney(subtotal)}
+            </p>
           </div>
           <div className="text-right">
             <p className="text-2xs text-ink-500">USt.</p>
-            <p className="text-sm font-medium">{formatMoney(taxAmount)}</p>
+            <p className="text-sm font-medium">
+              {formatMoney(taxAmount)}
+            </p>
           </div>
         </div>
 
@@ -656,25 +681,83 @@ function OfferToInvoiceModal({ offer, projects, clients, onClose, onCreated }: {
 }
 
 // ---------------------------------------------------------------------------
-// Goal Editor
+// FIX: Neuer Goal Editor (Nutzt die globale 'goals' Tabelle)
 // ---------------------------------------------------------------------------
 
-function GoalEditor({ year, existing, onSaved }: { year: number; existing: AnnualGoal | null; onSaved: () => void }) {
+function GoalEditor({ year, revenueGoal, projectGoal, onSaved }: { 
+  year: number; 
+  revenueGoal: Goal | null; 
+  projectGoal: Goal | null; 
+  onSaved: () => void; 
+}) {
   const [open, setOpen] = useState(false);
-  const [revenue, setRevenue] = useState(existing?.target_revenue_cents ? String(existing.target_revenue_cents / 100) : '');
-  const [count, setCount] = useState(existing?.target_project_count ? String(existing.target_project_count) : '');
+  
+  // Eingabefelder befüllen mit bestehenden Werten (ohne Cent-Berechnung im UI)
+  const [revenue, setRevenue] = useState(revenueGoal?.target_value ? String(revenueGoal.target_value) : '');
+  const [count, setCount] = useState(projectGoal?.target_value ? String(projectGoal.target_value) : '');
+
+  useEffect(() => {
+    setRevenue(revenueGoal?.target_value ? String(revenueGoal.target_value) : '');
+    setCount(projectGoal?.target_value ? String(projectGoal.target_value) : '');
+  }, [revenueGoal, projectGoal, open]);
 
   async function save() {
-    const id = await uuid();
-    await goals.upsert({
-      id: existing?.id || id,
-      year,
-      target_revenue_cents: revenue ? Math.round(parseFloat(revenue) * 100) : null,
-      target_project_count: count ? parseInt(count) : null,
-      target_hourly_rate_cents: null,
-      notes: existing?.notes || null,
-      created_at: existing?.created_at || new Date().toISOString(),
-    });
+    const yearStr = String(year);
+
+    // 1. Umsatz-Jahresziel verarbeiten
+    if (revenue.trim()) {
+      const targetVal = parseFloat(revenue);
+      if (revenueGoal) {
+        await goals2.update(revenueGoal.id, { target_value: targetVal });
+      } else {
+        const id = await uuid();
+        await goals2.insert({
+          id,
+          title: `Jahresziel Umsatz ${year}`,
+          period_type: 'year',
+          period_key: yearStr,
+          target_value: targetVal,
+          current_value: 0,
+          unit: '€',
+          category: 'revenue',
+          notes: null,
+          is_completed: 0,
+          completed_at: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        } as any);
+      }
+    } else if (revenueGoal) {
+      await goals2.remove(revenueGoal.id);
+    }
+
+    // 2. Projektanzahl-Jahresziel verarbeiten
+    if (count.trim()) {
+      const targetVal = parseFloat(count);
+      if (projectGoal) {
+        await goals2.update(projectGoal.id, { target_value: targetVal });
+      } else {
+        const id = await uuid();
+        await goals2.insert({
+          id,
+          title: `Jahresziel Projekte ${year}`,
+          period_type: 'year',
+          period_key: yearStr,
+          target_value: targetVal,
+          current_value: 0,
+          unit: 'Projekte',
+          category: 'projects',
+          notes: null,
+          is_completed: 0,
+          completed_at: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        } as any);
+      }
+    } else if (projectGoal) {
+      await goals2.remove(projectGoal.id);
+    }
+
     setOpen(false);
     onSaved();
   }
@@ -682,19 +765,20 @@ function GoalEditor({ year, existing, onSaved }: { year: number; existing: Annua
   if (!open) {
     return (
       <button onClick={() => setOpen(true)} className="btn-ghost w-full mt-4 text-sm">
-        {existing ? 'Bearbeiten' : 'Jahresziel setzen'}
+        {hasGoals(revenueGoal, projectGoal) ? 'Jahresziele anpassen' : 'Jahresziele setzen'}
       </button>
     );
   }
+
   return (
     <div className="mt-4 p-3 rounded-lg bg-surfaceAlt/50 space-y-2">
       <Field label="Umsatzziel (€)">
-        <input type="number" className="input" value={revenue} onChange={(e) => setRevenue(e.target.value)} placeholder="z.B. 60000" />
+        <input type="number" className="input text-sm" value={revenue} onChange={(e) => setRevenue(e.target.value)} placeholder="z.B. 60000" />
       </Field>
       <Field label="Projektanzahl">
-        <input type="number" className="input" value={count} onChange={(e) => setCount(e.target.value)} placeholder="z.B. 12" />
+        <input type="number" className="input text-sm" value={count} onChange={(e) => setCount(e.target.value)} placeholder="z.B. 12" />
       </Field>
-      <div className="flex gap-2">
+      <div className="flex gap-2 pt-1">
         <button onClick={save} className="btn-primary text-sm">Speichern</button>
         <button onClick={() => setOpen(false)} className="btn-ghost text-sm">Abbrechen</button>
       </div>
@@ -702,11 +786,15 @@ function GoalEditor({ year, existing, onSaved }: { year: number; existing: Annua
   );
 }
 
+function hasGoals(rev: Goal | null, proj: Goal | null): boolean {
+  return rev !== null || proj !== null;
+}
+
 // ---------------------------------------------------------------------------
 // Modals
 // ---------------------------------------------------------------------------
 
-function AddTxModal({ open, onClose, projects, onAdded }: {
+function AddTxModal({ open, onClose, projects: projectList, onAdded }: {
   open: boolean; onClose: () => void; projects: Project[]; onAdded: () => void;
 }) {
   const [type, setType] = useState<'income' | 'expense'>('expense');
@@ -763,7 +851,7 @@ function AddTxModal({ open, onClose, projects, onAdded }: {
         <Field label="Projekt (optional)">
           <select className="input" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
             <option value="">— Kein Projekt —</option>
-            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {projectList.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         </Field>
       </div>
