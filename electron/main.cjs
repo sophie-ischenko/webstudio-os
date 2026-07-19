@@ -212,7 +212,7 @@ function openDatabase() {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
-  // NEU & SYNCHRON: Spalte sofort beim Öffnen der DB-Datei anlegen, falls sie fehlt (suppliers)
+  // Spaltennachrüstung: suppliers -> cancel_intended
   try {
     db.exec("ALTER TABLE suppliers ADD COLUMN cancel_intended INTEGER NOT NULL DEFAULT 0;");
     console.warn('[DATENBANK] Spalte cancel_intended erfolgreich nachgerüstet!');
@@ -222,7 +222,7 @@ function openDatabase() {
     }
   }
 
-  // NEU & SYNCHRON: Wochen-Planungs-Spalte für Modulphasen nachrüsten
+  // Spaltennachrüstung: project_phases -> planned_week_key
   try {
     db.exec("ALTER TABLE project_phases ADD COLUMN planned_week_key TEXT;");
     console.warn('[DATENBANK] Spalte planned_week_key erfolgreich für Modulphasen nachgerüstet!');
@@ -232,13 +232,43 @@ function openDatabase() {
     }
   }
 
-  // NEU & SYNCHRON: Content-Säulen Spalte für Social-Posts nachrüsten
+  // Spaltennachrüstung: social_posts -> content_pillar
   try {
     db.exec("ALTER TABLE social_posts ADD COLUMN content_pillar TEXT;");
     console.warn('[DATENBANK] Spalte content_pillar erfolgreich für social_posts nachgerüstet!');
   } catch (e) {
     if (!e.message.includes('duplicate column name') && !e.message.includes('already exists')) {
       console.error('[DATENBANK FEHLER] Fehler bei content_pillar Spalte:', e.message);
+    }
+  }
+
+  // Spaltennachrüstung: project_price_calcs -> project_id
+  try {
+    db.exec("ALTER TABLE project_price_calcs ADD COLUMN project_id TEXT;");
+    console.warn('[DATENBANK] Spalte project_id erfolgreich für project_price_calcs nachgerüstet!');
+  } catch (e) {
+    if (!e.message.includes('duplicate column name') && !e.message.includes('already exists')) {
+      console.error('[DATENBANK FEHLER] Fehler bei project_id Spalte in project_price_calcs:', e.message);
+    }
+  }
+
+  // Spaltennachrüstung: todos -> category
+  try {
+    db.exec("ALTER TABLE todos ADD COLUMN category TEXT;");
+    console.warn('[DATENBANK] Spalte category erfolgreich für todos nachgerüstet!');
+  } catch (e) {
+    if (!e.message.includes('duplicate column name') && !e.message.includes('already exists')) {
+      console.error('[DATENBANK FEHLER] Fehler bei category Spalte in todos:', e.message);
+    }
+  }
+
+  // Spaltennachrüstung: todos -> sprint_id
+  try {
+    db.exec("ALTER TABLE todos ADD COLUMN sprint_id TEXT;");
+    console.warn('[DATENBANK] Spalte sprint_id erfolgreich für todos nachgerüstet!');
+  } catch (e) {
+    if (!e.message.includes('duplicate column name') && !e.message.includes('already exists')) {
+      console.error('[DATENBANK FEHLER] Fehler bei sprint_id Spalte in todos:', e.message);
     }
   }
 
@@ -587,7 +617,7 @@ function registerIpc() {
       openDatabase();
       return { ok: true };
     } catch (e) {
-      try { openDatabase(); } catch { /* best effort */ }
+      try { openDatabase(); } catch (err) { /* best effort */ }
       return { ok: false, reason: String(e.message || e) };
     }
   });

@@ -482,6 +482,8 @@ export const goals2 = {
   remove: (id: string) => run('DELETE FROM goals WHERE id = ?', [id]),
 };
 
+// --- Ersetze den todos-Block in src/lib/db.ts durch diesen ---
+
 export const todos = {
   list: () => all<Todo>('SELECT * FROM todos ORDER BY week_key DESC NULLS LAST, position, created_at DESC'),
   byWeek: (weekKey: string) =>
@@ -489,9 +491,9 @@ export const todos = {
   unassigned: () =>
     all<Todo>("SELECT * FROM todos WHERE week_key IS NULL AND status != 'done' ORDER BY priority DESC, created_at DESC"),
   insert: (t: Todo) => run(
-    `INSERT INTO todos (id, title, description, status, priority, due_date, week_key, project_id, social_post_id, position)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [t.id, t.title, t.description, t.status, t.priority, t.due_date, t.week_key, t.project_id, t.social_post_id, t.position]
+    `INSERT INTO todos (id, title, description, status, priority, due_date, week_key, sprint_id, project_id, social_post_id, position, category)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [t.id, t.title, t.description, t.status, t.priority, t.due_date, t.week_key, (t as any).sprint_id ?? null, t.project_id, t.social_post_id, t.position, (t as any).category ?? null]
   ),
   update: (id: string, fields: Partial<Todo>) => {
     const keys = Object.keys(fields).filter(k => k !== 'id' && k !== 'created_at');

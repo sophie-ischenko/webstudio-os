@@ -1,577 +1,438 @@
-import { useEffect, useState, useCallback } from 'react';
-import {
-  Plus, Trash2, Check, ChevronLeft, ChevronRight, Link2, Calendar,
-  Flag, Inbox, CheckSquare, Clock, Pencil, List, LayoutGrid,
+import { useState, useEffect, useCallback } from 'react';
+import { 
+  Plus, Search, Trash2, Calendar, CheckSquare, Square, 
+  Clock, Archive, ChevronLeft, ChevronRight, Tag, Filter
 } from 'lucide-react';
-import { todos, projects, posts, uuid } from '../lib/db';
+import { todos, projects, posts, uuid, run, all } from '../lib/db';
 import type { Todo, Project, SocialPost, TodoStatus, TodoPriority } from '../types';
-import { formatDate, isoWeek, startOfWeek, relativeDeadline } from '../lib/format';
-import { Badge, EmptyState, Field, Modal } from '../components/ui';
-import { KanbanBoard, type KanbanColumn } from '../components/KanbanBoard';
+import { formatDate, todayISO, relativeDeadline } from '../lib/format';
+import { Badge, Field, EmptyState, Modal } from '../components/ui';
 
-const STATUS_LABELS: Record<TodoStatus, string> = {
-  open: 'Offen', in_progress: 'In Arbeit', done: 'Erledigt',
+// Konstanten für Status und Prioritäten definieren
+const STATUS_LABELS: Record<string, string> = {
+  open: 'Offen',
+  in_progress: 'In Arbeit',
+  done: 'Erledigt',
 };
-const PRIORITY_LABELS: Record<TodoPriority, string> = {
-  low: 'Niedrig', normal: 'Normal', high: 'Hoch',
+
+const PRIORITY_LABELS: Record<string, string> = {
+  low: 'Niedrig',
+  normal: 'Normal',
+  high: 'Hoch',
 };
 
-const TODO_COLUMNS: KanbanColumn<TodoStatus>[] = [
-  { id: 'open', label: 'Offen', colorClass: 'bg-ink-300' },
-  { id: 'in_progress', label: 'In Arbeit', colorClass: 'bg-accent-500' },
-  { id: 'done', label: 'Erledigt', colorClass: 'bg-success-500' },
-];
+// Vordefinierte Standardkategorien zur Schnellauswahl
+const PRESET_CATEGORIES = ['Arbeit', 'Privat', 'Finanzen', 'Einkauf', 'Haushalt'];
 
-function weekKeyHelper(offset: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + offset * 7);
-  const ws = startOfWeek(d);
-  return `${ws.getFullYear()}-W${String(isoWeek(ws)).padStart(2, '0')}`;
-}
-
-function weekLabel(key: string): string {
-  const [y, w] = key.split('-W');
-  return `KW ${w} ${y}`;
+function getWeekKey(date: Date = new Date()): string {
+  const tempDate = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = tempDate.getUTCDay() || 7;
+  tempDate.setUTCDate(tempDate.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(tempDate.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((tempDate.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${tempDate.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
 }
 
 export function TodosView() {
-  const [weekList, setWeekList] = useState<Todo[]>([]);
-  const [inboxList, setInboxList] = useState<Todo[]>([]);
+  const [todoList, setTodoList] = useState<Todo[]>([]);
   const [projectList, setProjectList] = useState<Project[]>([]);
-  const [postList, setPostList] = useState<SocialPost[]>([]);
+  const [postList, setSocialPosts] = useState<SocialPost[]>([]);
+  
   const [weekOffset, setWeekOffset] = useState(0);
-  const [showAdd, setShowAdd] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'done'>('open');
+  const [categoryFilter, setCategoryFilter] = useState<string>('all'); // Filter für Kategorie
+  const [showAddModal, setShowAddModal] = useState(false);
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null);
-  const [filter, setFilter] = useState<'all' | TodoStatus>('all');
-  const [todoView, setTodoView] = useState<'list' | 'board'>('list');
 
-  const currentWeek = weekKeyHelper(weekOffset);
-  const realCurrentWeek = weekKeyHelper(0);
+  // Daten laden & Sicherheitsprüfung für die DB-Spalte ausführen
+  const loadData = useCallback(async () => {
+    // Frontend-Sicherheitscheck: Spalte 'category' anlegen, falls noch nicht geschehen
+    const tableInfo = await all<any>("PRAGMA table_info(todos)").catch(() => []);
+    const hasCol = tableInfo.some(c => c.name === 'category');
+    if (!hasCol) {
+      await run("ALTER TABLE todos ADD COLUMN category TEXT;").catch(() => {});
+    }
 
-  const load = useCallback(async () => {
-    setWeekList(await todos.byWeek(currentWeek));
-    setInboxList(await todos.unassigned());
-    setProjectList(await projects.list());
-    setPostList(await posts.list());
-  }, [currentWeek]);
+    const [t, p, sp] = await Promise.all([
+      todos.list(),
+      projects.list(),
+      posts.list()
+    ]);
+    setTodoList(t);
+    setProjectList(p);
+    setSocialPosts(sp);
+  }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadData(); }, [loadData]);
 
-  const filteredWeek = filter === 'all' ? weekList : weekList.filter(t => t.status === filter);
-  const openCount = weekList.filter(t => t.status !== 'done').length;
-  const doneCount = weekList.filter(t => t.status === 'done').length;
+  const targetDate = new Date();
+  targetDate.setDate(targetDate.getDate() + weekOffset * 7);
+  const currentWeekKey = getWeekKey(targetDate);
 
-  async function cycleStatus(todo: Todo) {
-    const next: TodoStatus = todo.status === 'open' ? 'in_progress' : todo.status === 'in_progress' ? 'done' : 'open';
-    await todos.update(todo.id, {
-      status: next,
-      completed_at: next === 'done' ? new Date().toISOString() : null,
-    });
-    load();
+  async function handleToggleTodo(todo: Todo) {
+    const newStatus = todo.status === 'done' ? 'todo' : 'done';
+    const completedAt = newStatus === 'done' ? new Date().toISOString() : null;
+    await todos.update(todo.id, { status: newStatus, completed_at: completedAt });
+    loadData();
   }
 
-  async function setTodoStatus(todo: Todo, status: TodoStatus) {
-    await todos.update(todo.id, {
-      status,
-      completed_at: status === 'done' ? new Date().toISOString() : null,
-    });
-    load();
-  }
-
-  async function setPriority(id: string, priority: TodoPriority) {
-    await todos.update(id, { priority });
-    load();
-  }
-
-  async function remove(id: string) {
+  async function handleDeleteTodo(id: string) {
+    if (!confirm('Aufgabe wirklich löschen?')) return;
     await todos.remove(id);
-    load();
+    loadData();
   }
 
-  async function assignToWeek(id: string) {
-    await todos.update(id, { week_key: currentWeek });
-    load();
+  async function handleSaveTodo(data: any) {
+    if (editingTodo) {
+      await todos.update(editingTodo.id, data);
+    } else {
+      const id = await uuid();
+      await todos.insert({
+        id,
+        ...data,
+        position: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      });
+    }
+    setShowAddModal(false);
+    setEditingTodo(null);
+    loadData();
   }
 
-  function projectLabel(t: Todo): string | null {
-    if (t.project_id) {
-      const p = projectList.find(p => p.id === t.project_id);
-      return p?.name || null;
-    }
-    if (t.social_post_id) {
-      const p = postList.find(p => p.id === t.social_post_id);
-      return p ? `Social: ${p.topic || 'Unbenannt'}` : null;
-    }
-    return null;
-  }
+  // Alle aktuell genutzten Kategorien für den Filter extrahieren
+  const activeCategories = Array.from(
+    new Set(todoList.map(t => (t as any).category).filter(Boolean))
+  ) as string[];
+
+  // Filter- & Suchlogik
+  const filteredTodos = todoList.filter(t => {
+    const matchesSearch = 
+      t.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (t.description || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      ((t as any).category || '').toLowerCase().includes(searchTerm.toLowerCase());
+    
+    const matchesStatus = statusFilter === 'all' || 
+      (statusFilter === 'open' && t.status !== 'done') || 
+      (statusFilter === 'done' && t.status === 'done');
+
+    const matchesCategory = categoryFilter === 'all' || (t as any).category === categoryFilter;
+
+    return matchesSearch && matchesStatus && matchesCategory;
+  });
+
+  const weekTodos = filteredTodos.filter(t => t.week_key === currentWeekKey);
+  const backlogTodos = filteredTodos.filter(t => !t.week_key && t.status !== 'done');
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="font-display text-2xl font-medium text-ink-900">To-dos</h1>
-          <p className="text-sm text-ink-500 mt-0.5">Wochen-Listen + Inbox — projektunabhängig, optional verlinkbar</p>
+          <h1 className="font-display text-2xl font-medium text-ink-900">Aufgaben & To-dos</h1>
+          <p className="text-sm text-ink-500 mt-0.5">Wochenplanung und backlog-übergreifende To-dos</p>
         </div>
-        <button onClick={() => setShowAdd(true)} className="btn-primary">
-          <Plus size={16} /> Neue Aufgabe
+        <button onClick={() => setShowAddModal(true)} className="btn-primary">
+          <Plus size={14} /> Neue Aufgabe
         </button>
       </div>
 
-      {/* Week view */}
-      <div className="card p-5">
-        <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-          <div className="flex items-center gap-2">
-            <Calendar size={18} className="text-accent-600" />
-            <h2 className="section-title">{weekLabel(currentWeek)}</h2>
-            <Badge tone="neutral">{openCount} offen</Badge>
-            {doneCount > 0 && <Badge tone="success">{doneCount} erledigt</Badge>}
-          </div>
-          <div className="flex items-center gap-4">
-            {/* View toggle */}
-            <div className="flex bg-surfaceMuted rounded-lg p-0.5">
-              <button
-                onClick={() => setTodoView('list')}
-                className={`p-1.5 rounded-md transition-colors ${todoView === 'list' ? 'bg-surface shadow-soft text-ink-900' : 'text-ink-500'}`}
-                title="Listenansicht"
-              >
-                <List size={15} />
-              </button>
-              <button
-                onClick={() => setTodoView('board')}
-                className={`p-1.5 rounded-md transition-colors ${todoView === 'board' ? 'bg-surface shadow-soft text-ink-900' : 'text-ink-500'}`}
-                title="Board-Ansicht"
-              >
-                <LayoutGrid size={15} />
-              </button>
-            </div>
-            
-            <div className="flex items-center gap-2">
-              <button onClick={() => setWeekOffset(o => o - 1)} className="p-1.5 rounded-lg hover:bg-surfaceAlt"><ChevronLeft size={18} /></button>
-              <button onClick={() => setWeekOffset(0)} className="btn-ghost text-sm">Diese Woche</button>
-              <button onClick={() => setWeekOffset(o => o + 1)} className="p-1.5 rounded-lg hover:bg-surfaceAlt"><ChevronRight size={18} /></button>
-            </div>
-          </div>
-        </div>
-
-        {/* Filter (nur in der Listenansicht relevant, im Kanban werden alle nach Status gruppiert) */}
-        {todoView === 'list' && (
-          <div className="flex gap-2 mb-4">
-            {(['all', 'open', 'in_progress', 'done'] as const).map(f => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                className={`chip transition-colors ${filter === f ? 'bg-accent-600 text-white' : 'bg-surfaceMuted text-ink-700 hover:bg-line'}`}
-              >
-                {f === 'all' ? 'Alle' : STATUS_LABELS[f]}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {weekList.length === 0 ? (
-          <EmptyState
-            icon={<CheckSquare size={24} />}
-            title="Keine To-dos in dieser Woche"
-            hint="Füge Aufgaben hinzu oder weise Inbox-Items dieser Woche zu."
+      {/* Filter & Suche */}
+      <div className="card p-4 flex flex-wrap gap-4 bg-surface items-center justify-between">
+        <div className="relative flex-1 min-w-[240px]">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
+          <input
+            type="text"
+            placeholder="Aufgaben oder Kategorien durchsuchen..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="input pl-9 w-full"
           />
-        ) : todoView === 'board' ? (
-          <KanbanBoard
-            columns={TODO_COLUMNS}
-            cards={weekList}
-            getStatus={(todo) => todo.status}
-            onMove={(todo, newStatus) => setTodoStatus(todo, newStatus)}
-            renderCard={(todo) => {
-  const isDone = todo.status === 'done';
-  const dl = relativeDeadline(todo.due_date);
-  const label = projectLabel(todo);
-  return (
-    <div className="bg-surface border border-line rounded-lg p-3 shadow-soft hover:border-accent-200 transition-colors">
-      <div className="flex items-start justify-between gap-2">
-        <p className={`text-sm font-medium ${isDone ? 'text-ink-400 line-through' : 'text-ink-900'}`}>
-          {todo.title}
-        </p>
-        <button
-          onClick={(e) => { e.stopPropagation(); remove(todo.id); }}
-          className="p-0.5 text-ink-300 hover:text-danger-600 shrink-0"
-          title="Löschen"
-        >
-          <Trash2 size={12} />
-        </button>
-      </div>
-      
-      <div className="flex flex-col gap-1.5 mt-2">
-        {label && (
-          <span className="flex items-center gap-1 text-2xs text-ink-500">
-            <Link2 size={11} className="shrink-0" />
-            <span className="truncate">{label}</span>
-          </span>
-        )}
-        {todo.due_date && (
-          <span className={`text-2xs flex items-center gap-1 ${dl.tone === 'overdue' ? 'text-danger-600' : dl.tone === 'soon' ? 'text-warning-600' : 'text-ink-400'}`}>
-            <Calendar size={11} /> {formatDate(todo.due_date)}
-          </span>
-        )}
-      </div>
-      
-      {/* Jetzt ohne border-t und ohne Schrägstrich im CSS */}
-      <div className="mt-3 flex items-center justify-between">
-        <select
-          value={todo.priority}
-          onChange={(e) => setPriority(todo.id, e.target.value as TodoPriority)}
-          className="text-2xs bg-transparent border-0 text-ink-500 focus:outline-none cursor-pointer"
-        >
-          {(['low', 'normal', 'high'] as TodoPriority[]).map(p => (
-            <option key={p} value={p}>{PRIORITY_LABELS[p]}</option>
-          ))}
-        </select>
-        <div className="flex items-center gap-1.5">
-          {todo.priority === 'high' && <Flag size={12} className="text-danger-500" />}
-          <button
-            onClick={(e) => { e.stopPropagation(); setEditingTodo(todo); }}
-            className="p-1 text-ink-400 hover:text-accent-600 rounded"
-            title="Bearbeiten"
+        </div>
+        
+        <div className="flex gap-2 items-center">
+          {/* Kategorie-Filter */}
+          <Filter size={14} className="text-ink-400" />
+          <select 
+            className="input !py-1.5 text-xs w-auto mr-2"
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
           >
-            <Pencil size={12} />
+            <option value="all">Alle Kategorien</option>
+            {activeCategories.map(cat => (
+              <option key={cat} value={cat}>{cat}</option>
+            ))}
+          </select>
+
+          <button 
+            onClick={() => setStatusFilter('open')} 
+            className={`chip text-sm ${statusFilter === 'open' ? 'bg-accent-600 text-white' : 'bg-surfaceMuted text-ink-700'}`}
+          >
+            Offen
+          </button>
+          <button 
+            onClick={() => setStatusFilter('done')} 
+            className={`chip text-sm ${statusFilter === 'done' ? 'bg-accent-600 text-white' : 'bg-surfaceMuted text-ink-700'}`}
+          >
+            Erledigt
+          </button>
+          <button 
+            onClick={() => setStatusFilter('all')} 
+            className={`chip text-sm ${statusFilter === 'all' ? 'bg-accent-600 text-white' : 'bg-surfaceMuted text-ink-700'}`}
+          >
+            Alle
+          </button>
+        </div>
+      </div>
+
+      {/* Hauptbereich: Wochenfokus & Backlog */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+        
+        {/* WOCHENFOKUS (2/3 Breite) */}
+        <div className="lg:col-span-2 space-y-4">
+          <div className="flex items-center justify-between p-1 bg-surfaceAlt/50 rounded-xl border border-line">
+            <button onClick={() => setWeekOffset(w => w - 1)} className="p-1 hover:bg-surface rounded"><ChevronLeft size={16} /></button>
+            <span className="text-sm font-medium text-ink-900 flex items-center gap-2">
+              <Calendar size={14} className="text-accent-600" />
+              Wochenfokus: {currentWeekKey}
+            </span>
+            <button onClick={() => setWeekOffset(w => w + 1)} className="p-1 hover:bg-surface rounded"><ChevronRight size={16} /></button>
+          </div>
+
+          <div className="card p-4 space-y-3">
+            {weekTodos.length === 0 ? (
+              <EmptyState icon={<Calendar size={20} />} title="Keine Aufgaben für diese Woche" hint="Erstelle eine neue Aufgabe oder ziehe eine aus dem Backlog hierher." />
+            ) : (
+              <div className="divide-y divide-line">
+                {weekTodos.map(todo => (
+                  <TodoRow 
+                    key={todo.id} 
+                    todo={todo} 
+                    projects={projectList} 
+                    onToggle={handleToggleTodo} 
+                    onEdit={(t) => { setEditingTodo(t); setShowAddModal(true); }}
+                    onDelete={handleDeleteTodo}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* BACKLOG (1/3 Breite) */}
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 px-1 py-1.5">
+            <Archive size={14} className="text-ink-500" />
+            <h3 className="text-sm font-medium text-ink-900">Backlog (Ohne Woche)</h3>
+          </div>
+
+          <div className="card p-4 space-y-3 bg-surfaceAlt/20">
+            {backlogTodos.length === 0 ? (
+              <EmptyState icon={<Archive size={16} />} title="Kein Backlog" hint="Alle Aufgaben sind zeitlich geplant." />
+            ) : (
+              <div className="space-y-2">
+                {backlogTodos.map(todo => (
+                  <div 
+                    key={todo.id} 
+                    onClick={() => { setEditingTodo(todo); setShowAddModal(true); }}
+                    // FIX: 'bg-white' durch das semantische, dark-mode-fähige 'bg-surface' ersetzt
+                    className="p-3 bg-surface border border-line rounded-xl hover:border-accent-300 shadow-2xs transition-all cursor-pointer group"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-ink-900 leading-snug truncate">{todo.title}</p>
+                        {(todo as any).category && (
+                          <span className="inline-flex items-center gap-1 text-[10px] text-accent-700 bg-accent-50/50 px-1.5 py-0.5 rounded font-medium mt-1">
+                            <Tag size={8} /> {(todo as any).category}
+                          </span>
+                        )}
+                      </div>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); handleDeleteTodo(todo.id); }}
+                        className="p-1 text-ink-400 hover:text-danger-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                    {todo.project_id && (
+                      <span className="inline-block mt-2 text-[10px] bg-surfaceAlt text-ink-600 px-1.5 py-0.5 rounded font-medium">
+                        {projectList.find(p => p.id === todo.project_id)?.name}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Erstellen & Editieren Modal */}
+      {showAddModal && (
+        <TodoEditModal
+          isOpen={showAddModal}
+          onClose={() => { setShowAddModal(false); setEditingTodo(null); }}
+          todo={editingTodo}
+          projects={projectList}
+          posts={postList}
+          onSave={handleSaveTodo}
+          currentWeekKey={currentWeekKey}
+        />
+      )}
+    </div>
+  );
+}
+
+// Einzelne Aufgabenzeile
+function TodoRow({ todo, projects, onToggle, onEdit, onDelete }: any) {
+  const project = projects.find((p: any) => p.id === todo.project_id);
+  
+  return (
+    <div className="py-3 flex items-center justify-between group gap-4">
+      <div className="flex items-center gap-3 min-w-0">
+        <button onClick={() => onToggle(todo)} className="text-ink-400 hover:text-accent-600 shrink-0">
+          {todo.status === 'done' ? (
+            <CheckSquare size={18} className="text-success-600" />
+          ) : (
+            <Square size={18} />
+          )}
+        </button>
+        <div className="min-w-0">
+          <p className={`text-sm font-medium leading-snug ${todo.status === 'done' ? 'line-through text-ink-400' : 'text-ink-900'}`}>
+            {todo.title}
+          </p>
+          {todo.description && <p className="text-xs text-ink-500 mt-0.5 truncate">{todo.description}</p>}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-3 shrink-0">
+        {/* Kategorie-Badge */}
+        {todo.category && (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium bg-accent-50 text-accent-700">
+            <Tag size={10} /> {todo.category}
+          </span>
+        )}
+        {project && <Badge tone="info">{project.name}</Badge>}
+        {todo.priority === 'high' && <Badge tone="danger">Hoch</Badge>}
+        
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button onClick={() => onEdit(todo)} className="p-1.5 hover:bg-surfaceMuted rounded text-ink-400 hover:text-ink-800">
+            <Clock size={14} />
+          </button>
+          <button onClick={() => onDelete(todo.id)} className="p-1.5 hover:bg-surfaceMuted rounded text-ink-400 hover:text-danger-600">
+            <Trash2 size={14} />
           </button>
         </div>
       </div>
     </div>
   );
-}}
-            emptyHint="Karte hierher ziehen"
-          />
-        ) : (
-          <div className="space-y-1.5">
-            {filteredWeek.map(t => (
-              <TodoRow
-                key={t.id}
-                todo={t}
-                projectLabel={projectLabel(t)}
-                onCycle={() => cycleStatus(t)}
-                onPriority={(p) => setPriority(t.id, p)}
-                onRemove={() => remove(t.id)}
-                onEdit={() => setEditingTodo(t)}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Inbox */}
-      <div className="card p-5">
-        <div className="flex items-center gap-2 mb-4">
-          <Inbox size={18} className="text-ink-400" />
-          <h2 className="section-title">Inbox</h2>
-          <Badge tone="neutral">{inboxList.length} ohne Wochen-Zuordnung</Badge>
-        </div>
-        {inboxList.length === 0 ? (
-          <EmptyState icon={<Inbox size={22} />} title="Inbox leer" hint="Neue Aufgaben ohne Wochen-Zuordnung landen hier." />
-        ) : (
-          <div className="space-y-1.5">
-            {inboxList.map(t => (
-              <TodoRow
-                key={t.id}
-                todo={t}
-                projectLabel={projectLabel(t)}
-                onCycle={() => cycleStatus(t)}
-                onPriority={(p) => setPriority(t.id, p)}
-                onRemove={() => remove(t.id)}
-                onAssignWeek={() => assignToWeek(t.id)}
-                onEdit={() => setEditingTodo(t)}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      {showAdd && (
-        <AddTodoModal
-          open={true}
-          onClose={() => setShowAdd(false)}
-          onAdded={load}
-          projects={projectList}
-          posts={postList}
-          defaultWeek={realCurrentWeek}
-        />
-      )}
-
-      {editingTodo && (
-        <EditTodoModal
-          todo={editingTodo}
-          open={true}
-          onClose={() => setEditingTodo(null)}
-          onSaved={() => { setEditingTodo(null); load(); }}
-          projects={projectList}
-          posts={postList}
-        />
-      )}
-    </div>
-  );
 }
 
-function TodoRow({ todo, projectLabel, onCycle, onPriority, onRemove, onAssignWeek, onEdit }: {
-  todo: Todo;
-  projectLabel: string | null;
-  onCycle: () => void;
-  onPriority: (p: TodoPriority) => void;
-  onRemove: () => void;
-  onAssignWeek?: () => void;
-  onEdit: () => void;
-}) {
-  const isDone = todo.status === 'done';
-  const dl = relativeDeadline(todo.due_date);
-  return (
-    <div className={`flex items-center gap-3 px-3 py-2.5 rounded-lg group ${isDone ? 'bg-surfaceAlt/20' : 'bg-surfaceAlt/40 hover:bg-surfaceAlt/60'}`}>
-      <button
-        onClick={onCycle}
-        className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors
-          ${isDone ? 'bg-success-500 border-success-500 text-white' : todo.status === 'in_progress' ? 'border-accent-500 bg-accent-50' : 'border-line hover:border-accent-300'}`}
-      >
-        {isDone ? <Check size={12} /> : todo.status === 'in_progress' ? <Clock size={11} className="text-accent-600" /> : null}
-      </button>
+// Erfassen- / Editieren-Modal
+function TodoEditModal({ isOpen, onClose, todo, projects, posts, onSave, currentWeekKey }: any) {
+  const [title, setTitle] = useState(todo?.title || '');
+  const [description, setDescription] = useState(todo?.description || '');
+  const [status, setStatus] = useState(todo?.status || 'open');
+  const [priority, setPriority] = useState(todo?.priority || 'normal');
+  const [dueDate, setDueDate] = useState(todo?.due_date || '');
+  const [weekKeyVal, setWeekKeyVal] = useState(todo?.week_key || '');
+  const [projectId, setProjectId] = useState(todo?.project_id || '');
+  const [socialPostId, setSocialPostId] = useState(todo?.social_post_id || '');
+  const [category, setCategory] = useState(todo?.category || ''); // Neue Kategorie-State
 
-      <div className="flex-1 min-w-0">
-        <p className={`text-sm ${isDone ? 'text-ink-400 line-through' : 'text-ink-900'}`}>{todo.title}</p>
-        <div className="flex items-center gap-2 mt-0.5">
-          {projectLabel && (
-            <span className="flex items-center gap-1 text-2xs text-ink-500">
-              <Link2 size={11} /> {projectLabel}
-            </span>
-          )}
-          {todo.due_date && (
-            <span className={`flex items-center gap-1 text-2xs ${dl.tone === 'overdue' ? 'text-danger-600' : dl.tone === 'soon' ? 'text-warning-600' : 'text-ink-400'}`}>
-              <Calendar size={11} /> {formatDate(todo.due_date)}
-            </span>
-          )}
-          {todo.status === 'in_progress' && <Badge tone="accent">In Arbeit</Badge>}
-        </div>
-      </div>
-
-      <select
-        value={todo.priority}
-        onChange={(e) => onPriority(e.target.value as TodoPriority)}
-        className="text-2xs bg-transparent border-0 text-ink-500 focus:outline-none cursor-pointer"
-      >
-        {(['low', 'normal', 'high'] as TodoPriority[]).map(p => (
-          <option key={p} value={p}>{PRIORITY_LABELS[p]}</option>
-        ))}
-      </select>
-
-      {todo.priority === 'high' && <Flag size={13} className="text-danger-500" />}
-
-      {onAssignWeek && (
-        <button onClick={onAssignWeek} className="text-2xs text-accent-600 hover:underline px-2 py-1 rounded">
-          → Woche
-        </button>
-      )}
-
-      <button onClick={onEdit} className="p-1 text-ink-400 hover:text-accent-600 opacity-0 group-hover:opacity-100" title="Bearbeiten">
-        <Pencil size={14} />
-      </button>
-      <button onClick={onRemove} className="p-1 text-ink-400 hover:text-danger-600 opacity-0 group-hover:opacity-100" title="Löschen">
-        <Trash2 size={14} />
-      </button>
-    </div>
-  );
-}
-
-function AddTodoModal({ open, onClose, onAdded, projects, posts, defaultWeek }: {
-  open: boolean;
-  onClose: () => void;
-  onAdded: () => void;
-  projects: Project[];
-  posts: SocialPost[];
-  defaultWeek: string;
-}) {
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [priority, setPriority] = useState<TodoPriority>('normal');
-  const [dueDate, setDueDate] = useState('');
-  const [assignToWeek, setAssignToWeek] = useState(true);
-  const [linkType, setLinkType] = useState<'none' | 'project' | 'social'>('none');
-  const [projectId, setProjectId] = useState('');
-  const [postId, setPostId] = useState('');
-
-  async function submit() {
-    if (!title.trim()) return;
-    const id = await uuid();
-    await todos.insert({
-      id, title: title.trim(), description: description.trim() || null,
-      status: 'open', priority,
-      due_date: dueDate || null,
-      week_key: assignToWeek ? defaultWeek : null,
-      project_id: linkType === 'project' ? projectId || null : null,
-      social_post_id: linkType === 'social' ? postId || null : null,
-      position: 0, completed_at: null,
-      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-    });
-    setTitle(''); setDescription(''); setPriority('normal'); setDueDate(''); setProjectId(''); setPostId('');
-    onAdded();
-    onClose();
-  }
-
-  return (
-    <Modal open={open} onClose={onClose} title="Neue Aufgabe" size="md"
-      footer={<><button onClick={onClose} className="btn-ghost">Abbrechen</button><button onClick={submit} className="btn-primary" disabled={!title.trim()}>Erstellen</button></>}
-    >
-      <div className="space-y-4">
-        <Field label="Aufgabe"><input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="z.B. Landingpage für Projekt XY fertigstellen" autoFocus /></Field>
-        <Field label="Beschreibung (optional)"><textarea className="input min-h-[60px] resize-y" value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Priorität">
-            <select className="input" value={priority} onChange={(e) => setPriority(e.target.value as TodoPriority)}>
-              {(['low', 'normal', 'high'] as TodoPriority[]).map(p => <option key={p} value={p}>{PRIORITY_LABELS[p]}</option>)}
-            </select>
-          </Field>
-          <Field label="Fällig bis (optional)"><input type="date" className="input" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></Field>
-        </div>
-
-        <label className="flex items-center gap-2 text-sm text-ink-700 cursor-pointer">
-          <input type="checkbox" checked={assignToWeek} onChange={(e) => setAssignToWeek(e.target.checked)} className="rounded" />
-          Dieser Woche ({weekLabel(defaultWeek)}) zuordnen
-        </label>
-
-        <div>
-          <p className="label">Verknüpfung (optional)</p>
-          <div className="flex gap-2 mb-2">
-            <button onClick={() => setLinkType('none')} className={`chip ${linkType === 'none' ? 'bg-accent-600 text-white' : 'bg-surfaceMuted text-ink-700'}`}>Keine</button>
-            <button onClick={() => setLinkType('project')} className={`chip ${linkType === 'project' ? 'bg-accent-600 text-white' : 'bg-surfaceMuted text-ink-700'}`}>Projekt</button>
-            <button onClick={() => setLinkType('social')} className={`chip ${linkType === 'social' ? 'bg-accent-600 text-white' : 'bg-surfaceMuted text-ink-700'}`}>Social Post</button>
-          </div>
-          {linkType === 'project' && (
-            <select className="input" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-              <option value="">— Projekt wählen —</option>
-              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          )}
-          {linkType === 'social' && (
-            <select className="input" value={postId} onChange={(e) => setPostId(e.target.value)}>
-              <option value="">— Post wählen —</option>
-              {posts.map(p => <option key={p.id} value={p.id}>{p.topic || 'Unbenannt'} ({p.platform})</option>)}
-            </select>
-          )}
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-function EditTodoModal({
-  todo,
-  open,
-  onClose,
-  onSaved,
-  projects,
-  posts,
-}: {
-  todo: Todo;
-  open: boolean;
-  onClose: () => void;
-  onSaved: () => void;
-  projects: Project[];
-  posts: SocialPost[];
-}) {
-  const [title, setTitle] = useState(todo.title);
-  const [description, setDescription] = useState(todo.description || '');
-  const [priority, setPriority] = useState<TodoPriority>(todo.priority);
-  const [status, setStatus] = useState<TodoStatus>(todo.status);
-  const [dueDate, setDueDate] = useState(todo.due_date || '');
-  const [assignToWeek, setAssignToWeek] = useState(!!todo.week_key);
-  const [weekKey, setWeekKeyState] = useState(todo.week_key || weekKeyHelper(0));
-  const [linkType, setLinkType] = useState<'none' | 'project' | 'social'>(
-    todo.project_id ? 'project' : todo.social_post_id ? 'social' : 'none'
-  );
-  const [projectId, setProjectId] = useState(todo.project_id || '');
-  const [postId, setPostId] = useState(todo.social_post_id || '');
-
-  async function submit() {
-    if (!title.trim()) return;
-    await todos.update(todo.id, {
+  function submit() {
+    if (!title.trim()) return alert('Titel erforderlich');
+    onSave({
       title: title.trim(),
       description: description.trim() || null,
       status,
       priority,
       due_date: dueDate || null,
-      week_key: assignToWeek ? weekKey : null,
-      project_id: linkType === 'project' ? (projectId || null) : null,
-      social_post_id: linkType === 'social' ? (postId || null) : null,
-      updated_at: new Date().toISOString(),
+      week_key: weekKeyVal || null,
+      project_id: projectId || null,
+      social_post_id: socialPostId || null,
+      category: category.trim() || null // Übergibt Kategorie
     });
-    onSaved();
-    onClose();
   }
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Aufgabe bearbeiten"
-      size="md"
-      footer={
-        <>
-          <button onClick={onClose} className="btn-ghost">Abbrechen</button>
-          <button onClick={submit} className="btn-primary" disabled={!title.trim()}>
-            Speichern
-          </button>
-        </>
-      }
-    >
+    <Modal open={isOpen} onClose={onClose} title={todo ? "Aufgabe bearbeiten" : "Neue Aufgabe"}>
       <div className="space-y-4">
-        <Field label="Aufgabe">
-          <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
+        <Field label="Aufgabentitel *">
+          <input 
+            type="text" 
+            className="input" 
+            value={title} 
+            onChange={e => setTitle(e.target.value)} 
+            placeholder="z.B. Design-Schnittstellen fertigstellen"
+          />
         </Field>
-        <Field label="Beschreibung (optional)">
-          <textarea className="input min-h-[60px] resize-y" value={description} onChange={(e) => setDescription(e.target.value)} />
+
+        <Field label="Beschreibung">
+          <textarea 
+            className="input min-h-[80px]" 
+            value={description} 
+            onChange={e => setDescription(e.target.value)} 
+            placeholder="Details hinzufügen..."
+          />
         </Field>
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="Status">
-            <select className="input" value={status} onChange={(e) => setStatus(e.target.value as TodoStatus)}>
-              <option value="open">Offen</option>
-              <option value="in_progress">In Arbeit</option>
-              <option value="done">Erledigt</option>
-            </select>
+
+        {/* Kategorie & Priorität */}
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Kategorie (z.B. Arbeit, Privat)">
+            <input 
+              type="text" 
+              className="input" 
+              value={category} 
+              onChange={e => setCategory(e.target.value)} 
+              placeholder="z.B. Einkauf"
+              list="category-presets" // Dropdown Vorschläge
+            />
+            <datalist id="category-presets">
+              {PRESET_CATEGORIES.map(cat => <option key={cat} value={cat} />)}
+            </datalist>
           </Field>
           <Field label="Priorität">
             <select className="input" value={priority} onChange={(e) => setPriority(e.target.value as TodoPriority)}>
-              <option value="low">Niedrig</option>
-              <option value="normal">Normal</option>
-              <option value="high">Hoch</option>
+              {Object.keys(PRIORITY_LABELS).map(p => (
+                <option key={p} value={p}>{PRIORITY_LABELS[p]}</option>
+              ))}
             </select>
           </Field>
-          <Field label="Fällig bis">
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Projekt">
+            <select className="input" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+              <option value="">— Kein Projekt —</option>
+              {projects.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Fokus-Woche">
+            <select className="input" value={weekKeyVal} onChange={e => setWeekKeyVal(e.target.value)}>
+              <option value="">— Keine Woche (Backlog) —</option>
+              <option value={currentWeekKey}>Diese Woche ({currentWeekKey})</option>
+              <option value={getWeekKey(new Date(Date.now() + 7 * 86400000))}>Nächste Woche</option>
+            </select>
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Social Post">
+            <select className="input" value={socialPostId} onChange={(e) => setSocialPostId(e.target.value)}>
+              <option value="">— Kein Post —</option>
+              {posts.map((p: any) => <option key={p.id} value={p.id}>{p.topic || p.platform}</option>)}
+            </select>
+          </Field>
+          <Field label="Fälligkeitsdatum">
             <input type="date" className="input" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
           </Field>
         </div>
 
-        <label className="flex items-center gap-2 text-sm text-ink-700 cursor-pointer">
-          <input type="checkbox" checked={assignToWeek} onChange={(e) => setAssignToWeek(e.target.checked)} className="rounded" />
-          Einer Woche zuordnen
-        </label>
-        {assignToWeek && (
-          <Field label="Woche (Format: YYYY-WXX)">
-            <input className="input" value={weekKey} onChange={(e) => setWeekKeyState(e.target.value)} />
-          </Field>
-        )}
-
-        <div>
-          <p className="label">Verknüpfung (optional)</p>
-          <div className="flex gap-2 mb-2">
-            <button onClick={() => setLinkType('none')} className={`chip ${linkType === 'none' ? 'bg-accent-600 text-white' : 'bg-surfaceMuted text-ink-700'}`}>Keine</button>
-            <button onClick={() => setLinkType('project')} className={`chip ${linkType === 'project' ? 'bg-accent-600 text-white' : 'bg-surfaceMuted text-ink-700'}`}>Projekt</button>
-            <button onClick={() => setLinkType('social')} className={`chip ${linkType === 'social' ? 'bg-accent-600 text-white' : 'bg-surfaceMuted text-ink-700'}`}>Social Post</button>
-          </div>
-          {linkType === 'project' && (
-            <select className="input" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
-              <option value="">— Projekt wählen —</option>
-              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          )}
-          {linkType === 'social' && (
-            <select className="input" value={postId} onChange={(e) => setPostId(e.target.value)}>
-              <option value="">— Post wählen —</option>
-              {posts.map(p => <option key={p.id} value={p.id}>{p.topic || 'Unbenannt'} ({p.platform})</option>)}
-            </select>
-          )}
+        <div className="flex gap-2 justify-end pt-3">
+          <button onClick={onClose} className="btn-ghost">Abbrechen</button>
+          <button onClick={submit} className="btn-primary">Speichern</button>
         </div>
       </div>
     </Modal>
