@@ -1,25 +1,38 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import {
-  Plus, Trash2, Save, FileText, GripVertical, Euro, Clock,
+  Plus, Trash2, Save, FileText, GripVertical, Euro, Clock, Pencil
 } from 'lucide-react';
-import { priceCalcs, uuid } from '../lib/db';
-import type { ProjectPriceCalc, PricePosition, ExtraCost } from '../types';
+import { priceCalcs, projects, uuid, run, all } from '../lib/db'; // 'all' importiert, um Tabellen-Infos zu prüfen
+import type { ProjectPriceCalc, PricePosition, ExtraCost, Project } from '../types';
 import { formatMoney, formatDate, parseMoneyToCents } from '../lib/format';
 import { EmptyState, Field, Modal, SectionHeader } from '../components/ui';
 
 export function ProjectCalculatorView() {
   const [list, setList] = useState<ProjectPriceCalc[]>([]);
+  const [projectList, setProjectList] = useState<Project[]>([]);
   const [editing, setEditing] = useState<ProjectPriceCalc | null>(null);
   const [showNew, setShowNew] = useState(false);
 
   const load = useCallback(async () => {
+    // PRÜFUNG: Erst fragen wir ab, ob die Spalte schon da ist
+    const tableInfo = await all<any>("PRAGMA table_info(project_price_calcs)").catch(() => []);
+    const hasCol = tableInfo.some(c => c.name === 'project_id');
+
+    // Nur ausführen, wenn die Spalte tatsächlich noch fehlt
+    if (!hasCol) {
+      await run("ALTER TABLE project_price_calcs ADD COLUMN project_id TEXT;").catch(() => {
+        // Fallback-Sicherung
+      });
+    }
+
     setList(await priceCalcs.list());
+    setProjectList(await projects.list());
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
   if (editing) {
-    return <CalcEditor calc={editing} onBack={() => { setEditing(null); load(); }} />;
+    return <CalcEditor calc={editing} projects={projectList} onBack={() => { setEditing(null); load(); }} />;
   }
 
   return (
@@ -45,29 +58,58 @@ export function ProjectCalculatorView() {
           />
         ) : (
           <div className="space-y-2">
-            {list.map(c => (
-              <button
-                key={c.id}
-                onClick={() => setEditing(c)}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-surfaceAlt transition-colors text-left group"
-              >
-                <div className="w-10 h-10 rounded-lg bg-accent-50 text-accent-600 flex items-center justify-center">
-                  <FileText size={18} />
+            {list.map(c => {
+              const linkedProj = projectList.find(p => p.id === (c as any).project_id);
+              return (
+                <div
+                  key={c.id}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-lg hover:bg-surfaceAlt/50 transition-colors text-left group"
+                >
+                  <div className="w-10 h-10 rounded-lg bg-accent-50 text-accent-600 flex items-center justify-center shrink-0">
+                    <FileText size={18} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-ink-900">{c.label || 'Unbenannte Kalkulation'}</p>
+                    <p className="text-2xs text-ink-500 mt-1">
+                      {linkedProj ? `Projekt: ${linkedProj.name}` : (c.client_name || 'Keine Kundin')} · {formatDate(c.created_at)} · {c.total_hours.toFixed(1)} h
+                    </p>
+                  </div>
+                  <span className="text-sm font-semibold text-ink-900 tabular-nums shrink-0 mr-2">{formatMoney(c.total_cents)}</span>
+                  
+                  {/* Aktionen auf der rechten Seite */}
+                  <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                    {/* Bearbeiten-Button (Stift) */}
+                    <button 
+                      onClick={() => setEditing(c)} 
+                      className="p-1.5 rounded-md hover:bg-surfaceMuted text-ink-400 hover:text-accent-600 transition-all"
+                      title="Bearbeiten"
+                    >
+                      <Pencil size={15} />
+                    </button>
+
+                    {/* Löschen-Button (Mülleimer) direkt in der Übersicht */}
+                    <button 
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        if (confirm('Kalkulation wirklich unwiderruflich löschen?')) {
+                          await priceCalcs.remove(c.id);
+                          load(); // Liste aktualisieren
+                        }
+                      }} 
+                      className="p-1.5 rounded-md hover:bg-danger-50 text-ink-400 hover:text-danger-600 transition-all"
+                      title="Löschen"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-ink-900">{c.label || 'Unbenannte Kalkulation'}</p>
-                  <p className="text-2xs text-ink-500">
-                    {c.client_name || 'Keine Kundin'} · {formatDate(c.created_at)} · {c.total_hours.toFixed(1)} h
-                  </p>
-                </div>
-                <span className="text-sm font-semibold text-ink-900 tabular-nums">{formatMoney(c.total_cents)}</span>
-              </button>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
 
-      <NewCalcModal open={showNew} onClose={() => setShowNew(false)} onCreated={(c) => setEditing(c)} />
+      <NewCalcModal open={showNew} onClose={() => setShowNew(false)} projects={projectList} onCreated={(c) => setEditing(c)} />
     </div>
   );
 }
@@ -76,9 +118,10 @@ export function ProjectCalculatorView() {
 // Editor
 // ---------------------------------------------------------------------------
 
-function CalcEditor({ calc, onBack }: { calc: ProjectPriceCalc; onBack: () => void }) {
+function CalcEditor({ calc, projects: projectList, onBack }: { calc: ProjectPriceCalc; projects: Project[]; onBack: () => void }) {
   const [label, setLabel] = useState(calc.label || '');
   const [clientName, setClientName] = useState(calc.client_name || '');
+  const [projectId, setProjectId] = useState((calc as any).project_id || '');
   const [positions, setPositions] = useState<PricePosition[]>(JSON.parse(calc.positions_json || '[]'));
   const [extraCosts, setExtraCosts] = useState<ExtraCost[]>(JSON.parse(calc.extra_costs_json || '[]'));
   const [discountCents, setDiscountCents] = useState(calc.discount_cents);
@@ -131,6 +174,7 @@ function CalcEditor({ calc, onBack }: { calc: ProjectPriceCalc; onBack: () => vo
     await priceCalcs.update(calc.id, {
       label: label || null,
       client_name: clientName || null,
+      project_id: projectId || null,
       positions_json: JSON.stringify(positions),
       extra_costs_json: JSON.stringify(extraCosts),
       discount_cents: discountCents,
@@ -140,6 +184,12 @@ function CalcEditor({ calc, onBack }: { calc: ProjectPriceCalc; onBack: () => vo
       total_hours: result.totalHours,
       notes: notes || null,
     });
+    onBack();
+  }
+
+  async function handleDelete() {
+    if (!confirm('Kalkulation wirklich unwiderruflich löschen?')) return;
+    await priceCalcs.remove(calc.id);
     onBack();
   }
 
@@ -157,14 +207,39 @@ function CalcEditor({ calc, onBack }: { calc: ProjectPriceCalc; onBack: () => vo
               onChange={(e) => setLabel(e.target.value)}
               placeholder="Kalkulation-Name"
             />
-            <input
-              className="input !border-transparent !bg-transparent !px-0 text-sm text-ink-500"
-              value={clientName}
-              onChange={(e) => setClientName(e.target.value)}
-              placeholder="Kundin (optional)"
-            />
+            <div className="flex items-center gap-3">
+              <input
+                className="input !border-transparent !bg-transparent !px-0 text-sm text-ink-500 w-auto"
+                value={clientName}
+                onChange={(e) => setClientName(e.target.value)}
+                placeholder="Kundin (optional)"
+              />
+              <span className="text-ink-300">·</span>
+              <select
+                className="text-xs bg-transparent border-0 text-accent-600 font-medium focus:outline-none cursor-pointer"
+                value={projectId}
+                onChange={(e) => {
+                  setProjectId(e.target.value);
+                  const p = projectList.find(x => x.id === e.target.value);
+                  if (p) setClientName(p.client_name || '');
+                }}
+              >
+                <option value="">— Kein Projekt verknüpft —</option>
+                {projectList.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
           </div>
-          <button onClick={save} className="btn-primary"><Save size={15} /> Speichern</button>
+          
+          <div className="flex gap-2">
+            <button onClick={handleDelete} className="btn-danger text-sm">
+              <Trash2 size={15} /> Löschen
+            </button>
+            <button onClick={save} className="btn-primary">
+              <Save size={15} /> Speichern
+            </button>
+          </div>
         </div>
       </div>
 
@@ -333,30 +408,66 @@ function SumRow({ icon, label, value, bold, tone }: { icon?: React.ReactNode; la
 
 // ---------------------------------------------------------------------------
 
-function NewCalcModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (c: ProjectPriceCalc) => void }) {
+function NewCalcModal({ open, onClose, projects, onCreated }: { open: boolean; onClose: () => void; projects: Project[]; onCreated: (c: ProjectPriceCalc) => void }) {
   const [label, setLabel] = useState('');
+  const [projectId, setProjectId] = useState('');
   const [clientName, setClientName] = useState('');
 
   async function create() {
+    if (!label.trim()) return;
     const id = await uuid();
     const calc: ProjectPriceCalc = {
-      id, label: label || null, client_name: clientName || null,
-      positions_json: '[]', extra_costs_json: '[]',
-      discount_cents: 0, buffer_pct: 0,
-      subtotal_cents: 0, total_cents: 0, total_hours: 0,
-      notes: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      id, 
+      label: label.trim(), 
+      client_name: clientName || null,
+      positions_json: '[]', 
+      extra_costs_json: '[]',
+      discount_cents: 0, 
+      buffer_pct: 0,
+      subtotal_cents: 0, 
+      total_cents: 0, 
+      total_hours: 0,
+      notes: null, 
+      created_at: new Date().toISOString(), 
+      updated_at: new Date().toISOString(),
     };
+    
+    if (projectId) {
+      (calc as any).project_id = projectId;
+    }
+
     await priceCalcs.insert(calc);
-    setLabel(''); setClientName('');
+    setLabel(''); setClientName(''); setProjectId('');
     onClose();
     onCreated(calc);
   }
 
   return (
     <Modal open={open} onClose={onClose} title="Neue Kalkulation" size="md"
-      footer={<><button onClick={onClose} className="btn-ghost">Abbrechen</button><button onClick={create} className="btn-primary">Erstellen</button></>}
+      footer={<><button onClick={onClose} className="btn-ghost">Abbrechen</button><button onClick={create} className="btn-primary" disabled={!label.trim()}>Erstellen</button></>}
     >
       <div className="space-y-4">
+        <Field label="Projekt verknüpfen (optional)">
+          <select 
+            className="input" 
+            value={projectId} 
+            onChange={(e) => {
+              const pid = e.target.value;
+              setProjectId(pid);
+              const p = projects.find(x => x.id === pid);
+              if (p) {
+                setClientName(p.client_name || '');
+                if (!label) setLabel(`Kalkulation: ${p.name}`);
+              }
+            }}
+          >
+            <option value="">— Kein Projekt verknüpfen —</option>
+            {projects.map(p => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </Field>
+        
         <Field label="Bezeichnung"><input className="input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="z.B. Website Relaunch Müller" autoFocus /></Field>
         <Field label="Kundin (optional)"><input className="input" value={clientName} onChange={(e) => setClientName(e.target.value)} /></Field>
       </div>
