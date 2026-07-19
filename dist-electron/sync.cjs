@@ -52,7 +52,7 @@ async function syncWithRelay(db, window) {
     const tracked = db.prepare(`SELECT SUM(minutes) as total FROM time_entries WHERE entry_date >= ?`).get(monthStartStr);
     const trackedHours = (tracked.total || 0) / 60;
 
-    // B2. NEU: Erfasste Ist-Stunden für die aktuelle Woche (Mo-So)
+    // B2. Erfasste Ist-Stunden für die aktuelle Woche (Mo-So)
     const trackedWeek = db.prepare(`SELECT SUM(minutes) as total FROM time_entries WHERE entry_date >= ?`).get(weekStartStr);
     const trackedWeekHours = (trackedWeek.total || 0) / 60;
 
@@ -75,7 +75,6 @@ async function syncWithRelay(db, window) {
       LEFT JOIN phase_template_items pti ON pp.phase_template_item_id = pti.id
     `).all();
 
-    // electron/sync.cjs (ca. Zeile 50)
     const snapshotPayload = {
       projects: projects.map(p => ({
         id: p.id, 
@@ -91,9 +90,9 @@ async function syncWithRelay(db, window) {
       stats: {
         month_name: new Date().toLocaleDateString('de-DE', { month: 'long', year: 'numeric' }),
         monthly_limit: monthlyLimit,
-        weekly_limit: weeklyCapacity, // Wochenkapazität (Soll)
+        weekly_limit: weeklyCapacity, 
         tracked_hours: trackedHours,
-        tracked_hours_week: trackedWeekHours, // NEU: Wochen-Ist
+        tracked_hours_week: trackedWeekHours, 
         planned_hours: plannedHours
       },
       generated_at: new Date().toISOString()
@@ -121,10 +120,16 @@ async function syncWithRelay(db, window) {
     if (entries && entries.length > 0) {
       console.log(`[Sync] ${entries.length} neue Einträge vom Handy gefunden.`);
       
+      // FIX: Dynamische Zuordnung von 'entity_type' & nachträgliche Updates via 'DO UPDATE SET' erlauben
       const insertStmt = db.prepare(`
         INSERT INTO time_entries (id, entity_type, entity_id, minutes, entry_date, note, created_at)
-        VALUES (@id, 'project', @entity_id, @minutes, @entry_date, @note, @created_at)
-        ON CONFLICT(id) DO NOTHING
+        VALUES (@id, @entity_type, @entity_id, @minutes, @entry_date, @note, @created_at)
+        ON CONFLICT(id) DO UPDATE SET
+          entity_type = excluded.entity_type,
+          entity_id = excluded.entity_id,
+          minutes = excluded.minutes,
+          entry_date = excluded.entry_date,
+          note = excluded.note
       `);
 
       const successfullySavedIds = [];
@@ -133,6 +138,7 @@ async function syncWithRelay(db, window) {
           try {
             insertStmt.run({
               id: e.id,
+              entity_type: e.entity_type || 'project', // Fallback, falls ältere App-Versionen kein Typ senden
               entity_id: e.entity_id,
               minutes: e.minutes,
               entry_date: e.entry_date.split('T')[0],
