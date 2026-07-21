@@ -772,7 +772,24 @@ app.whenReady().then(() => {
 
   registerIpc();
   createWindow();
-  syncInterval = startSyncLoop(() => db, 30000, mainWindow);
+
+  // NEU: Liest die echte Wochenkapazität direkt aus app_settings (dieselbe
+  // Tabelle/Spalten wie das settings-Objekt in src/lib/db.ts:
+  // get: key/value aus app_settings). Vorher fehlte dieser Parameter komplett
+  // an startSyncLoop -> sync.cjs nutzte IMMER den Fallback-Wert 40 statt der
+  // echten, eingestellten Kapazität (20).
+  const getWeeklyCapacity = () => {
+    try {
+      const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get('weekly_capacity_hours');
+      const parsed = row ? parseFloat(row.value) : NaN;
+      return isNaN(parsed) ? 40 : parsed;
+    } catch (e) {
+      console.error('[Sync] Konnte weekly_capacity_hours nicht lesen:', e.message);
+      return 40;
+    }
+  };
+
+  syncInterval = startSyncLoop(() => db, 30000, mainWindow, getWeeklyCapacity);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
