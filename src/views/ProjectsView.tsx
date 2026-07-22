@@ -60,6 +60,16 @@ export function ProjectsView() {
         <button onClick={() => setShowNew(true)} className="btn-primary">
           <Plus size={16} /> Neues Projekt
         </button>
+        <button 
+  onClick={async () => {
+    await kitchen.syncKitchenDeletes();
+    load(); // Lädt die Liste nach dem Aufräumen neu
+  }} 
+  className="btn-outline ml-2" 
+  title="Prüft ob Projekte in Kitchen gelöscht wurden und entfernt sie lokal"
+>
+  <RotateCw size={16} /> Aufräumen
+</button>
       </div>
 
       {/* Filter chips */}
@@ -380,6 +390,27 @@ function ProjectDetail({ project, onBack }: { project: Project; onBack: () => vo
 }
 
   async function deleteProject() {
+    // 1. Zuerst Kitchen Remote löschen (Reihenfolge ist wichtig!)
+    try {
+      const boardId = (project as any).kitchen_board_id;
+      const folderId = (project as any).kitchen_folder_id;
+
+      if (boardId) {
+        console.log("🗑 Lösche Board in Kitchen:", boardId);
+        await kitchen.deleteBoard(boardId);
+      }
+      
+      if (folderId) {
+        console.log("🗑 Lösche Folder in Kitchen:", folderId);
+        await kitchen.deleteFolder(folderId);
+      }
+    } catch (err) {
+      console.warn("❌ Fehler beim Kitchen-Löschen (vielleicht schon weg?):", err);
+      // Fail-Silent: Wenn das Projekt bei Kitchen schon fehlt, 
+      // dürfen wir das lokale Löschen nicht blockieren!
+    }
+
+    // 2. Danach lokal löschen
     await projects.remove(project.id);
     onBack();
   }

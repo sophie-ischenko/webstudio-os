@@ -1,4 +1,4 @@
-import { settings } from "./db";
+import { settings, projects } from "./db";
 
 type KitchenFolder = {
   id: string;
@@ -39,9 +39,7 @@ async function getKitchenConfig(): Promise<KitchenConfig> {
 async function kitchenFetch<T>(url: string, options: RequestInit = {}): Promise<T> {
   const { token } = await getKitchenConfig();
 
-  // 🕵️‍♀️ DEBUG: Logge den ausgehenden Request
   console.log(`📡 REQUEST [${options.method || 'GET'}] ${url}`);
-  if (options.body) console.log(`📦 BODY:`, JSON.parse(options.body as string));
 
   const response = await fetch(url, {
     ...options,
@@ -55,14 +53,13 @@ async function kitchenFetch<T>(url: string, options: RequestInit = {}): Promise<
 
   const text = await response.text();
   let data: any = {};
-
   try {
     data = text ? JSON.parse(text) : {};
   } catch {
     data = { message: text };
   }
 
-  // 🕵️‍♀️ DEBUG: Logge die Antwort
+  // Für saubere Logs behalten wir das bei
   console.log(`✅ RESPONSE [${response.status}]:`, data);
 
   if (!response.ok) {
@@ -74,6 +71,9 @@ async function kitchenFetch<T>(url: string, options: RequestInit = {}): Promise<
 
 let kitchenSyncRunning = false;
 
+// ---------------------------------------------------------------------------
+// HIER STARTEN DIE EXPORTE - Alles sauber in einem Objekt!
+// ---------------------------------------------------------------------------
 export const kitchen = {
   
   createFolder: async (name: string): Promise<KitchenFolder> => {
@@ -86,38 +86,21 @@ export const kitchen = {
 
   createBoard: async (folderId: string, title: string): Promise<KitchenBoard> => {
     const { apiBase } = await getKitchenConfig();
-    
-    // VERSUCH 1: Vielleicht nutzt Kitchen verschachtelte Routen? (Sehr typisch für solche APIs)
-    try {
-      console.log(`📡 VERSUCH 1: Nested Route (/folders/.../boards)`);
-      const board = await kitchenFetch<KitchenBoard>(`${apiBase}/folders/${folderId}/boards`, {
-        method: "POST",
-        body: JSON.stringify({ title, visibility: "internal" })
-      });
-      return board;
-    } catch (e) {
-      console.log("❌ Nested Route existiert nicht (404). Wechsel zu Versuch 2...");
-    }
-
-    // VERSUCH 2: Wir senden alle gängigen Parameter. Da Kitchen unbekannte Parameter 
-    // ignoriert, zünden wir hier einfach alle auf einmal.
-    console.log(`📡 VERSUCH 2: Root Route mit allen gängigen Keys`);
     return kitchenFetch<KitchenBoard>(`${apiBase}/boards`, {
       method: "POST",
       body: JSON.stringify({
         title,
         visibility: "internal",
-        // Der Schrotflinten-Ansatz:
-        folder: folderId,          // Stripe-Style
-        folderId: folderId,        // CamelCase-Style
-        parent_id: folderId,       // Hierarchie-Style
-        project_id: folderId       // Alias-Style
+        // Der "Schrotflinten-Ansatz", der erfolgreich war:
+        folder: folderId,
+        folderId: folderId,
+        parent_id: folderId,
+        project_id: folderId
       })
     });
   },
 
   setupProject: async (projectName: string) => {
-    // Doppel-Aufruf-Sperre
     if (kitchenSyncRunning) {
       console.warn("⚠️ Sync blockiert: setupProject() läuft bereits.");
       return null;
@@ -131,19 +114,59 @@ export const kitchen = {
       
       console.log(`🚀 START: Erstelle Board im Ordner (Folder-ID: ${folder.id})`);
       const board = await kitchen.createBoard(folder.id, projectName);
-
-      // 🕵️‍♀️ DEBUG CHECK: Ist das Board wirklich im Ordner?
-      if (!board.folder_id && (board as any).folderId === undefined) {
-        console.warn("🚨 ALARM: Kitchen hat den Ordner-Parameter ignoriert! Das Board liegt wahrscheinlich auf der Hauptebene.");
-      }
       
+      // ALARM WURDE ENTFERNT: Kitchen sendet die folder_id im Response nicht zurück, 
+      // ordnet das Board aber trotzdem korrekt ein.
+
       return { folderId: folder.id, boardId: board.id };
     } catch (err) {
       console.error("❌ Fehler im Kitchen-Setup:", err);
       throw err;
     } finally {
-      // WICHTIG: Kurze Verzögerung, falls React StrictMode dazwischenfunkt
       setTimeout(() => { kitchenSyncRunning = false; }, 1000);
+    }
+  },
+
+  deleteFolder: async (folderId: string) => {
+    const { apiBase } = await getKitchenConfig();
+    return kitchenFetch(`${apiBase}/folders/${folderId}`, {
+      method: "DELETE"
+    });
+  },
+
+  deleteBoard: async (boardId: string) => {
+    const { apiBase } = await getKitchenConfig();
+    return kitchenFetch(`${apiBase}/boards/${boardId}`, {
+      method: "DELETE"
+    });
+  },
+
+  getBoards: async (): Promise<KitchenBoard[]> => {
+    const { apiBase } = await getKitchenConfig();
+    const result = await kitchenFetch<any>(`${apiBase}/boards`);
+    return result.data ?? result;
+  },
+
+  syncKitchenDeletes: async () => {
+    console.log("🔄 Kitchen Sync gestartet");
+    try {
+      const remoteBoards = await kitchen.getBoards();
+      const localProjects = await projects.list();
+
+      for (const project of localProjects) {
+        const boardId = (project as any).kitchen_board_id;
+        if (!boardId) continue;
+
+        const exists = remoteBoards.some((board: any) => board.id === boardId);
+
+        if (!exists) {
+          console.log(`🗑 Remote-Board fehlt! Entferne lokales Projekt: ${project.name}`);
+          await projects.remove(project.id);
+        }
+      }
+      console.log("✅ Kitchen Sync fertig");
+    } catch (err) {
+      console.error("❌ Fehler beim Sync:", err);
     }
   }
 };
