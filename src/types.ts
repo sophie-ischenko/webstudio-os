@@ -76,6 +76,8 @@ export interface Project {
   notes: string | null;
   created_at: string;
   updated_at: string;
+  kitchen_folder_id: string | null; // ID des Projekts in Kitchen
+  kitchen_board_id: string | null;  // ID des Haupt-Boards in Kitchen
 }
 
 export interface ProjectPhase {

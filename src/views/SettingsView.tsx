@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Database, Download, Info, Save, HardDrive, Plus, X,
   FileJson, FileSpreadsheet, RotateCcw, Trash2, User, Clock,
+  Link2,
 } from 'lucide-react';
 
 import {
@@ -39,6 +40,11 @@ export function SettingsView() {
   const [ownerTaxId, setOwnerTaxId] = useState('');
   const [ownerSaved, setOwnerSaved] = useState(false);
 
+  // Kitchen.co Integration
+  const [kitchenToken, setKitchenToken] = useState('');
+  const [kitchenWorkspace, setKitchenWorkspace] = useState('');
+  const [kitchenSaved, setKitchenSaved] = useState(false);
+
   useEffect(() => {
     (async () => {
       const c = await settings.get('currency_default');
@@ -65,6 +71,12 @@ export function SettingsView() {
         } catch (err) { /* ignore */ }
       }
 
+      // Kitchen.co Daten laden
+      const kt = await settings.get('kitchen_api_token');
+      if (kt) setKitchenToken(kt.value);
+      const kw = await settings.get('kitchen_workspace_id');
+      if (kw) setKitchenWorkspace(kw.value);
+
       setPlatformList(await getPlatforms());
       setFormatList(await getFormats());
       setPillarList(await getPillars());
@@ -90,6 +102,13 @@ export function SettingsView() {
     }));
     setOwnerSaved(true);
     setTimeout(() => setOwnerSaved(false), 2000);
+  }
+
+  async function saveKitchenData() {
+    await settings.set('kitchen_api_token', kitchenToken.trim());
+    await settings.set('kitchen_workspace_id', kitchenWorkspace.trim());
+    setKitchenSaved(true);
+    setTimeout(() => setKitchenSaved(false), 2000);
   }
 
   async function doBackup() {
@@ -235,6 +254,39 @@ export function SettingsView() {
           </Field>
           <button onClick={saveOwnerData} className="btn-primary">
             <Save size={14} /> {ownerSaved ? 'Gespeichert ✓' : 'Speichern'}
+          </button>
+        </div>
+      </div>
+
+      {/* Kitchen.co Integration */}
+      <div className="card p-5 border-l-4 border-accent-500">
+        <div className="flex items-center gap-2 mb-1">
+          <Link2 size={18} className="text-accent-600" />
+          <h2 className="section-title">Kitchen.co Integration</h2>
+        </div>
+        <p className="text-sm text-ink-500 mb-4">
+          Verknüpfe Studio OS mit deinem Kitchen.co Workspace, um automatisch Projektordner zu erstellen.
+        </p>
+        <div className="space-y-4">
+          <Field label="API Token" hint="Kitchen Settings > API">
+            <input 
+              type="password" 
+              className="input font-mono text-sm" 
+              value={kitchenToken} 
+              onChange={(e) => setKitchenToken(e.target.value)} 
+              placeholder="ktch_..." 
+            />
+          </Field>
+          <Field label="Workspace ID" hint="Die Subdomain (z.B. 'mein-studio')">
+            <input 
+              className="input" 
+              value={kitchenWorkspace} 
+              onChange={(e) => setKitchenWorkspace(e.target.value)} 
+              placeholder="mein-studio" 
+            />
+          </Field>
+          <button onClick={saveKitchenData} className="btn-primary">
+            <Save size={14} /> {kitchenSaved ? 'Gespeichert ✓' : 'Kitchen.co Daten speichern'}
           </button>
         </div>
       </div>

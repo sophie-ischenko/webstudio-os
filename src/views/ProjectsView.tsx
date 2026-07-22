@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
-import {
+import { 
   Plus, ChevronRight, Play, Square, Trash2, Check, Link2, FileText,
   CalendarClock, FolderKanban, ArrowLeft, Pencil, Image, X, Download, Eye,
-  List, LayoutGrid,
+  List, LayoutGrid, RotateCw // <--- Neu
 } from 'lucide-react';
 import {
   projects, phases, checklist, assets, templates, uuid, clients,
@@ -16,6 +16,7 @@ import { formatDate, relativeDeadline, todayISO } from '../lib/format';
 import { startTimer, useRunningTimer, stopAndSave, formatElapsed } from '../lib/timer';
 import { Modal, Badge, EmptyState, Field, ConfirmInline } from '../components/ui';
 import { KanbanBoard, type KanbanColumn } from '../components/KanbanBoard';
+import { kitchen } from '../lib/kitchen';
 
 const PHASE_COLUMNS: KanbanColumn<PhaseStatus>[] = [
   { id: 'open', label: 'Offen', colorClass: 'bg-ink-300' },
@@ -137,7 +138,7 @@ function ProjectCard({ project, onOpen, onTimer }: { project: Project; onOpen: (
 // Korrigierte ProjectDetail() Funktion - ersetze die ganze Funktion damit:
 
 function ProjectDetail({ project, onBack }: { project: Project; onBack: () => void }) {
-  const [phaseList, setPhaseList] = useState<ProjectPhase[]>([]);
+
   const [checklistMap, setChecklistMap] = useState<Record<string, ProjectChecklistItem[]>>({});
   const [assetList, setAssetList] = useState<ProjectAsset[]>([]);
   const [notes, setNotes] = useState(project.notes || '');
@@ -152,6 +153,9 @@ function ProjectDetail({ project, onBack }: { project: Project; onBack: () => vo
   const running = useRunningTimer();
   const isThisRunning = running?.entityType === 'project' && running?.entityId === project.id;
 
+  const [phaseList, setPhaseList] = useState<ProjectPhase[]>([]);
+
+  const [syncing, setSyncing] = useState(false); // <--- Neu: Lade-State
   const [projectStatus, setProjectStatus] = useState(project.status);
 
   const load = useCallback(async () => {
@@ -203,10 +207,23 @@ function ProjectDetail({ project, onBack }: { project: Project; onBack: () => vo
   async function addPhase() {
     if (!newPhaseName.trim()) return;
     const id = await uuid();
+    let kitchenCardId = null;
+
+    // Wenn das Projekt verknüpft ist, lege auch eine Card an!
+    if (project.kitchen_board_id) {
+      try {
+        const card = await kitchen.createTask(project.kitchen_board_id, newPhaseName.trim());
+        kitchenCardId = card.id;
+      } catch (err) {
+        console.warn("Kitchen Task konnte nicht erstellt werden:", err);
+      }
+    }
+
     await phases.insert({
       id, project_id: project.id, phase_template_item_id: null,
       name_override: newPhaseName.trim(), status: 'open',
       deadline: null, completed_at: null, position_override: phaseList.length,
+      kitchen_card_id: kitchenCardId, // Neue DB Spalte!
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     });
     setNewPhaseName('');
@@ -231,22 +248,54 @@ function ProjectDetail({ project, onBack }: { project: Project; onBack: () => vo
     setSelectedTemplate('');
     load();
   }
-
-  // ✅ KORRIGIERT: Neuladen nach Status-Änderung
-  async function changeProjectStatus(status: ProjectStatus) {
-    await projects.update(project.id, { status });
-    if (status === 'done') {
-      await projects.update(project.id, { actual_end_date: new Date().toISOString().split('T')[0] });
+  async function syncWithKitchen() {
+    setSyncing(true);
+    try {
+      const result = await kitchen.setupProject(project.name);
+      if (result) {
+        // Speichere Folder und Board ID direkt in deiner Projekt-Tabelle
+        await projects.update(project.id, {
+          kitchen_folder_id: result.folderId,
+          kitchen_board_id: result.boardId,
+        });
+        
+        // UI aktualisieren
+        project.kitchen_folder_id = result.folderId;
+        project.kitchen_board_id = result.boardId;
+        load();
+      }
+    } catch (err: any) {
+      alert(`Fehler beim Sync: ${err.message}`);
+    } finally {
+      setSyncing(false);
     }
-    setProjectStatus(status);
-    load(); // ← Wichtig: Neuladen!
   }
-
+  async function changeProjectStatus(status: ProjectStatus) {
+  await projects.update(project.id, { status });
+  
+ 
+  
+  if (status === 'done') {
+    await projects.update(project.id, { actual_end_date: new Date().toISOString().split('T')[0] });
+  }
+  setProjectStatus(status);
+  load();
+}
   async function setPhaseStatus(phase: ProjectPhase, status: PhaseStatus) {
     await phases.update(phase.id, {
       status,
       completed_at: status === 'done' ? new Date().toISOString() : null,
     });
+
+    // Kitchen Card synchronisieren (Fail-Silent)
+    if (phase.kitchen_card_id) {
+      try {
+        await kitchen.moveTask(phase.kitchen_card_id, status);
+      } catch (err) {
+        console.warn("Kitchen Task konnte nicht verschoben werden:", err);
+      }
+    }
+
     load();
   }
 
@@ -276,6 +325,27 @@ function ProjectDetail({ project, onBack }: { project: Project; onBack: () => vo
   async function addAsset(type: ProjectAsset['type'], label: string, value: string, fileMeta?: { name: string; mime: string; size: number }) {
     if (!label.trim() || !value.trim()) return;
     const id = await uuid();
+
+    // --- NEU: Kitchen.co Dateiupload (Hintergrund-Aufruf) ---
+    if (type === 'file' && fileMeta) {
+      try {
+        // HINWEIS: Hier brauchst du die Ordner-ID aus Kitchen. 
+        // Angenommen, du speicherst sie in der Datenbank als 'kitchen_folder_id'.
+        // Falls du sie noch nirgends speicherst, müsstest du diese Info der Project-Tabelle hinzufügen.
+        const folderId = (project as any).kitchen_folder_id; 
+
+        if (folderId) {
+          await kitchen.uploadFile(folderId, value, fileMeta.name, fileMeta.mime);
+          console.log('Kitchen Datei erfolgreich hochgeladen');
+        } else {
+          console.warn('Keine Kitchen Folder ID für dieses Projekt hinterlegt.');
+        }
+      } catch (error) {
+        console.error('Fehler beim Kitchen.co Upload:', error);
+      }
+    }
+    // --------------------------------------------------------
+
     await assets.insert({
       id, project_id: project.id, project_phase_id: null,
       type, label: label.trim(), value: value.trim(),
@@ -291,9 +361,23 @@ function ProjectDetail({ project, onBack }: { project: Project; onBack: () => vo
   }
 
   async function saveNotes() {
-    await projects.update(project.id, { notes });
-    setEditing(false);
+  await projects.update(project.id, { notes });
+  
+  // Ohne neuen Button: Prüfe ob #sync im Text steht
+  if (notes.includes('#sync')) {
+    try {
+      await kitchen.setupProject(project.name);
+      // Optional: Entferne das #sync nach erfolgreichem Setup wieder aus den Notizen
+      const cleanNotes = notes.replace('#sync', '✅ Kitchen synced');
+      await projects.update(project.id, { notes: cleanNotes });
+      setNotes(cleanNotes);
+    } catch (e) {
+      console.error(e);
+    }
   }
+  
+  setEditing(false);
+}
 
   async function deleteProject() {
     await projects.remove(project.id);
@@ -312,7 +396,25 @@ function ProjectDetail({ project, onBack }: { project: Project; onBack: () => vo
             <h1 className="font-display text-2xl font-medium text-ink-900">{project.name}</h1>
             <p className="text-sm text-ink-500 mt-0.5">{project.client_name || 'Keine Kundin'}</p>
           </div>
+          
           <div className="flex items-center gap-2">
+            {/* --- NEUER SYNC BUTTON --- */}
+            <button 
+              onClick={syncWithKitchen} 
+              disabled={syncing || !!(project as any).kitchen_folder_id}
+              
+              className={`btn-outline ${notes.includes('Kitchen-ID:') ? 'text-success-600 border-success-200' : ''}`}
+              title="Mit Kitchen.co synchronisieren"
+            >
+              <RotateCw size={14} className={syncing ? 'animate-spin' : ''} />
+              {syncing 
+  ? 'Synchronisiere...' 
+  : (project as any).kitchen_folder_id 
+    ? 'Mit Kitchen verknüpft' 
+    : 'Kitchen Sync'}
+              </button>
+            {/* ------------------------- */}
+
             {isThisRunning ? (
               <button onClick={() => stopAndSave()} className="btn-primary">
                 <Square size={14} /> {formatElapsed()} · Stop
@@ -322,6 +424,7 @@ function ProjectDetail({ project, onBack }: { project: Project; onBack: () => vo
                 <Play size={14} /> Timer starten
               </button>
             )}
+            
             {confirmDelete ? (
               <ConfirmInline message="Projekt wirklich löschen?" onConfirm={deleteProject} onCancel={() => setConfirmDelete(false)} />
             ) : (
@@ -986,8 +1089,17 @@ function NewProjectModal({ open, onClose, onCreated }: { open: boolean; onClose:
   async function create() {
     if (!name.trim()) return;
     const id = await uuid();
+
+    // --- NEU: Kitchen.co Integration (Hintergrund-Aufruf) ---
+    const kitchenFolderId = null;
+    // --------------------------------------------------------
+
     await projects.insert({
-      id, name: name.trim(),
+  id,
+  name: name.trim(),
+
+  kitchen_folder_id: kitchenFolderId,
+
       client_id: selectedClientId || null,
       client_name: clientName.trim() || null,
       client_company: clientCompany.trim() || null,
@@ -997,8 +1109,13 @@ function NewProjectModal({ open, onClose, onCreated }: { open: boolean; onClose:
       template_id: templateId || null, status: 'active',
       start_date: startDate || null, target_end_date: endDate || null,
       actual_end_date: null, notes: null,
+      
+      // OPTIONAL: Wenn du deine Datenbank im Backend anpasst, kannst du die ID hier speichern:
+      // kitchen_folder_id: kitchenFolderId, 
+
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     });
+
     // Generate phase snapshots from template
     if (templateId && tplItems[templateId]) {
       const items = tplItems[templateId].items;

@@ -281,7 +281,26 @@ function openDatabase() {
       console.error('[DATENBANK FEHLER] Fehler bei sprint_id Spalte in todos:', e.message);
     }
   }
+  // --- In electron/main.cjs innerhalb von openDatabase() hinzufügen ---
 
+// Kitchen.co Integration: Spalten für Projekte nachrüsten
+try {
+  db.exec("ALTER TABLE projects ADD COLUMN kitchen_folder_id TEXT;");
+  db.exec("ALTER TABLE projects ADD COLUMN kitchen_board_id TEXT;");
+  console.warn('[KITCHEN] Spalten für Projekte nachgerüstet');
+} catch (e) { /* Spalten existieren wahrscheinlich schon */ }
+
+// Kitchen.co Integration: Spalten für Phasen (Tasks) nachrüsten
+try {
+  db.exec("ALTER TABLE project_phases ADD COLUMN kitchen_task_id TEXT;");
+  console.warn('[KITCHEN] Spalten für Phasen nachgerüstet');
+} catch (e) { }
+
+// Kitchen.co Integration: Spalten für Dokumente/Assets nachrüsten
+try {
+  db.exec("ALTER TABLE project_assets ADD COLUMN kitchen_file_id TEXT;");
+  console.warn('[KITCHEN] Spalten für Assets nachgerüstet');
+} catch (e) { }
   applyBaseSchema(db);
   reconcileSchemaColumns(db, getSchemaPath());
   applyBaseSchema(db);
